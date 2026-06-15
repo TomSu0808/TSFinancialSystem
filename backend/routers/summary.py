@@ -70,6 +70,8 @@ def get_summary(
     change_cny = 0.0
     cost_cny = 0.0      # 仅统计成本已知的持仓
     profit_cny = 0.0
+    realized_pnl_cny = 0.0
+    realized_income_cny = 0.0
     for h in holdings:
         mv = market_value(h)
         dc = day_change(h)
@@ -84,6 +86,8 @@ def get_summary(
         if cb is not None:
             cost_cny += cb * rate
             profit_cny += (profit(h) or 0.0) * rate
+        realized_pnl_cny += (h.realized_pnl or 0.0) * rate
+        realized_income_cny += (h.realized_income or 0.0) * rate
 
     total_usd = total_cny / usdcny if usdcny else 0.0
 
@@ -101,6 +105,9 @@ def get_summary(
 
     total_profit = to_display(profit_cny)
     profit_pct = (profit_cny / cost_cny * 100) if cost_cny else 0.0
+    realized_pnl = to_display(realized_pnl_cny)
+    realized_income = to_display(realized_income_cny)
+    total_return = total_profit + realized_pnl + realized_income
 
     by_currency = [
         {
@@ -132,6 +139,9 @@ def get_summary(
         "change_pct": round(change_pct, 2),
         "total_profit": round(total_profit, 2),
         "profit_pct": round(profit_pct, 2),
+        "realized_pnl": round(realized_pnl, 2),
+        "realized_income": round(realized_income, 2),
+        "total_return": round(total_return, 2),
         "total_cost": round(to_display(cost_cny), 2),
         "rate": round(usdcny, 4),
         "by_currency": by_currency,

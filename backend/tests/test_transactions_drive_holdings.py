@@ -58,3 +58,13 @@ def test_derived_holding_rejects_manual_quantity_edit(client):
     hid = [h for h in client.get("/api/holdings").json() if h["source"] == "derived"][0]["id"]
     r = client.put(f"/api/holdings/{hid}", json={"quantity": 999})
     assert r.status_code == 400
+
+
+def test_summary_exposes_realized_split(client):
+    pid = _platform(client)
+    base = {"platform_id": pid, "symbol": "AAPL", "currency": "USD"}
+    client.post("/api/transactions", json={**base, "action": "buy", "date": "2026-01-01", "quantity": 100, "price": 10})
+    client.post("/api/transactions", json={**base, "action": "sell", "date": "2026-02-01", "quantity": 100, "price": 12})
+    s = client.get("/api/summary?currency=USD").json()
+    assert "realized_pnl" in s and "realized_income" in s and "total_return" in s
+    assert round(s["realized_pnl"], 2) == 200.0
