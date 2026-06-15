@@ -1,0 +1,13 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+sqlmodel>=0.0.16
+requests>=2.31
+# 认证：JWT 签发/校验、bcrypt 密码哈希、.env 配置加载
+python-jose[cryptography]>=3.3
+bcrypt>=4.0
+python-dotenv>=1.0
+# 行情数据源。pandas 锁 2.x，避免 akshare 与 pandas 3 不兼容。
+# Windows + Microsoft Store Python 安装若卡在 jsonpath 构建，
+# 安装前设环境变量： SETUPTOOLS_USE_DISTUTILS=stdlib
+akshare>=1.12
+pandas>=2,<3

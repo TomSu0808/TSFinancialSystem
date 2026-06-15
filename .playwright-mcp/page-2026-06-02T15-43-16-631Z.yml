@@ -1,0 +1,60 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]: 💰 资产管理
+    - menu [ref=e6]:
+      - menuitem "dashboard 总览" [ref=e7] [cursor=pointer]:
+        - img "dashboard" [ref=e8]:
+          - img [ref=e9]
+        - link "总览" [ref=e12]:
+          - /url: /
+      - menuitem "appstore 平台管理" [ref=e13] [cursor=pointer]:
+        - img "appstore" [ref=e14]:
+          - img [ref=e15]
+        - link "平台管理" [ref=e18]:
+          - /url: /platforms
+      - menuitem [disabled]:
+        - img:
+          - img
+  - main [ref=e19]:
+    - generic [ref=e20]:
+      - generic [ref=e24]:
+        - generic [ref=e26]:
+          - generic [ref=e28]: 总资产（人民币 ¥）
+          - generic [ref=e30]: ¥50,000.00
+          - generic [ref=e32]:
+            - generic [ref=e34]:
+              - img "arrow-up" [ref=e35]:
+                - img [ref=e36]
+              - text: ¥0.00
+            - generic [ref=e39]: (+0%)
+            - generic [ref=e40]: 今日
+        - generic [ref=e42]:
+          - radiogroup "segmented control" [ref=e44]:
+            - generic [ref=e45]:
+              - generic [ref=e46] [cursor=pointer]:
+                - radio "¥ 人民币" [checked]
+                - generic "¥ 人民币" [ref=e47]
+              - generic [ref=e48] [cursor=pointer]:
+                - radio "$ 美元"
+                - generic "$ 美元" [ref=e49]
+          - button "reload 更新行情" [ref=e51] [cursor=pointer]:
+            - img "reload" [ref=e53]:
+              - img [ref=e54]
+            - generic [ref=e56]: 更新行情
+          - generic [ref=e58]: "汇率 USD/CNY: 6.7809"
+      - generic [ref=e60]:
+        - generic [ref=e62]:
+          - generic [ref=e65]: 人民币资产 ¥
+          - generic [ref=e66]:
+            - generic [ref=e68]:
+              - generic [ref=e69]: ¥
+              - generic [ref=e70]: 50,000.00
+            - generic [ref=e71]: 折合 ¥50,000.00
+        - generic [ref=e73]:
+          - generic [ref=e76]: 美元资产 $
+          - generic [ref=e77]:
+            - generic [ref=e79]:
+              - generic [ref=e80]: $
+              - generic [ref=e81]: "0.00"
+            - generic [ref=e82]: 折合 ¥0.00
+      - generic [ref=e87]: 平台占比

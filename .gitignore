@@ -1,0 +1,19 @@
+# Python
+backend/.venv/
+backend/.venv_broken_mac/
+__pycache__/
+*.pyc
+backend/data.db
+
+# 密钥 / 环境配置（绝不进 Git）
+.env
+backend/.env
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# Editor / OS
+.vscode/
+.DS_Store
+._*

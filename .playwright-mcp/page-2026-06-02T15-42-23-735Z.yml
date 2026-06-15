@@ -1,0 +1,46 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]: 💰 资产管理
+    - menu [ref=e6]:
+      - menuitem "dashboard 总览" [ref=e7] [cursor=pointer]:
+        - img "dashboard" [ref=e8]:
+          - img [ref=e9]
+        - link "总览" [ref=e12]:
+          - /url: /
+      - menuitem "appstore 平台管理" [ref=e13] [cursor=pointer]:
+        - img "appstore" [ref=e14]:
+          - img [ref=e15]
+        - link "平台管理" [ref=e18]:
+          - /url: /platforms
+      - menuitem [disabled]:
+        - img:
+          - img
+  - main [ref=e19]:
+    - generic [ref=e20]:
+      - list [ref=e26]:
+        - listitem [ref=e27]
+        - listitem [ref=e28]
+        - listitem [ref=e29]
+        - listitem [ref=e30]
+      - generic [ref=e32]:
+        - generic [ref=e34]:
+          - generic [ref=e37]: 人民币资产 ¥
+          - list [ref=e41]:
+            - listitem [ref=e42]
+            - listitem [ref=e43]
+            - listitem [ref=e44]
+            - listitem [ref=e45]
+        - generic [ref=e47]:
+          - generic [ref=e50]: 美元资产 $
+          - list [ref=e54]:
+            - listitem [ref=e55]
+            - listitem [ref=e56]
+            - listitem [ref=e57]
+            - listitem [ref=e58]
+      - generic [ref=e60]:
+        - generic [ref=e63]: 平台占比
+        - list [ref=e67]:
+          - listitem [ref=e68]
+          - listitem [ref=e69]
+          - listitem [ref=e70]
+          - listitem [ref=e71]

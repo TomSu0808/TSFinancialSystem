@@ -1,0 +1,24 @@
+# Python
+**/.venv
+**/.venv_broken_mac
+**/__pycache__
+**/*.pyc
+
+# 本地数据库与密钥（绝不进镜像；上云用持久卷 + 环境变量）
+backend/data.db
+backend/.env
+
+# Node / 前端（镜像内重新构建）
+frontend/node_modules
+frontend/dist
+
+# 版本控制 / 编辑器 / 系统垃圾
+.git
+.gitignore
+.vscode
+.DS_Store
+**/._*
+
+# 杂项（截图、本地工具产物、文档）
+*.png
+.playwright-mcp

@@ -1,0 +1,28 @@
+# Fly.io 部署配置。首次跑 `fly launch` 时它可能提示用已有此文件——选「是」即可，
+# 也可能把 app 名改成你输入的名字。region 选了东京(nrt)，海外/亚洲访问都快，
+# 想换地区见 https://fly.io/docs/reference/regions/
+app = "asset-manager"
+primary_region = "nrt"
+
+[build]
+
+[env]
+  DATA_DIR = "/data"
+  # CORS 同源部署无需放开；如以后前端单独部署再到 secrets/env 里加 CORS_ORIGINS
+
+[http_service]
+  internal_port = 8000
+  force_https = true          # 自动 HTTPS（Fly 免费签发证书）
+  auto_stop_machines = "stop" # 没人访问时自动休眠，省额度
+  auto_start_machines = true  # 有请求自动唤醒
+  min_machines_running = 0
+
+# 持久卷：SQLite 的 data.db 落在这里，重新部署也不丢数据。
+# 部署前需先建卷： fly volumes create data --size 1 --region nrt
+[[mounts]]
+  source = "data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"            # pandas/akshare 略吃内存；不够就 fly scale memory 1024

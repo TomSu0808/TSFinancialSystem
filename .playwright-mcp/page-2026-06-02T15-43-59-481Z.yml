@@ -1,0 +1,49 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]: 💰 资产管理
+    - menu [ref=e6]:
+      - menuitem "dashboard 总览" [ref=e7] [cursor=pointer]:
+        - img "dashboard" [ref=e8]:
+          - img [ref=e9]
+        - link "总览" [ref=e12]:
+          - /url: /
+      - menuitem "appstore 平台管理" [ref=e13] [cursor=pointer]:
+        - img "appstore" [ref=e14]:
+          - img [ref=e15]
+        - link "平台管理" [ref=e18]:
+          - /url: /platforms
+      - menuitem [disabled]:
+        - img:
+          - img
+  - main [ref=e19]:
+    - generic [ref=e20]:
+      - generic [ref=e22]:
+        - generic [ref=e23]: 平台管理
+        - button "plus 添加平台" [ref=e25] [cursor=pointer]:
+          - img "plus" [ref=e27]:
+            - img [ref=e28]
+          - generic [ref=e31]: 添加平台
+      - generic [ref=e34]:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - table:
+                  - rowgroup:
+                    - row "平台 备注 操作":
+                      - columnheader "平台"
+                      - columnheader "备注"
+                      - columnheader "操作"
+                  - rowgroup:
+                    - row "?? test 管理资产 编辑 删除":
+                      - cell "??":
+                        - link "??":
+                          - /url: /platforms/1
+                      - cell "test"
+                      - cell "管理资产 编辑 删除":
+                        - generic:
+                          - generic:
+                            - link "管理资产":
+                              - /url: /platforms/1
+                          - generic: 编辑
+                          - generic: 删除
