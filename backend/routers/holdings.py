@@ -7,7 +7,10 @@ from sqlmodel import Session, select
 
 from auth import get_current_user
 from database import get_session
-from models import Currency, Holding, HoldingCreate, HoldingUpdate, Platform, User
+from models import (
+    Currency, Holding, HoldingCreate, HoldingSource, HoldingStatus,
+    HoldingUpdate, Platform, User,
+)
 from price_provider import fetch_quote
 
 router = APIRouter(prefix="/api/holdings", tags=["holdings"])
@@ -31,6 +34,7 @@ def _owned(session: Session, holding_id: int, user: User) -> Holding:
 def list_holdings(
     platform_id: Optional[int] = Query(None),
     currency: Optional[Currency] = Query(None),
+    include_closed: bool = Query(False),
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
@@ -39,6 +43,8 @@ def list_holdings(
         stmt = stmt.where(Holding.platform_id == platform_id)
     if currency is not None:
         stmt = stmt.where(Holding.currency == currency)
+    if not include_closed:
+        stmt = stmt.where(Holding.status != HoldingStatus.closed)
     return session.exec(stmt).all()
 
 
@@ -65,6 +71,10 @@ def update_holding(
 ):
     holding = _owned(session, holding_id, user)
     values = data.model_dump(exclude_unset=True)
+    if holding.source == HoldingSource.derived and (
+        "quantity" in values or "cost_price" in values
+    ):
+        raise HTTPException(400, "该持仓由交易流水驱动，请通过交易记录修改数量/成本")
     if "platform_id" in values:
         _check_platform(session, values["platform_id"], user)
     for key, value in values.items():
