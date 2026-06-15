@@ -68,3 +68,40 @@ def test_summary_exposes_realized_split(client):
     s = client.get("/api/summary?currency=USD").json()
     assert "realized_pnl" in s and "realized_income" in s and "total_return" in s
     assert round(s["realized_pnl"], 2) == 200.0
+
+
+def test_backup_roundtrip_preserves_derived(client):
+    pid = _platform(client)
+    client.post("/api/transactions", json={
+        "platform_id": pid, "action": "buy", "date": "2026-01-01",
+        "symbol": "AAPL", "name": "Apple", "currency": "USD",
+        "quantity": 100, "price": 10})
+    dump = client.get("/api/backup").json()
+    assert dump["holdings"][0]["source"] == "derived"
+    assert dump["transactions"][0]["holding_ref"] is not None
+
+    r = client.post("/api/backup/import", json=dump)
+    assert r.status_code == 200
+    derived = [h for h in client.get("/api/holdings").json() if h["source"] == "derived"]
+    assert len(derived) == 1
+    assert derived[0]["quantity"] == 100
+    assert derived[0]["cost_price"] == 10
+
+
+def test_import_legacy_backup_without_new_fields(client):
+    legacy = {
+        "platforms": [{"ref": 1, "name": "OldP", "note": None}],
+        "holdings": [{
+            "platform_ref": 1, "currency": "CNY", "asset_type": "cash",
+            "market": "NONE", "symbol": "", "name": "现金",
+            "quantity": None, "manual_value": 1000, "cost_price": None,
+        }],
+        "transactions": [],
+        "notes": [],
+    }
+    r = client.post("/api/backup/import", json=legacy)
+    assert r.status_code == 200
+    holds = client.get("/api/holdings").json()
+    assert len(holds) == 1
+    assert holds[0]["source"] == "manual"
+    assert holds[0]["manual_value"] == 1000

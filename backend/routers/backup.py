@@ -54,6 +54,11 @@ def export_backup(
                 "cost_price": h.cost_price,
                 "current_price": h.current_price,
                 "prev_close": h.prev_close,
+                "ref": h.id,
+                "source": h.source.value,
+                "status": h.status.value,
+                "realized_pnl": h.realized_pnl,
+                "realized_income": h.realized_income,
             }
             for h in holds
         ],
@@ -69,6 +74,7 @@ def export_backup(
                 "name": t.name, "symbol": t.symbol, "currency": t.currency.value,
                 "quantity": t.quantity, "price": t.price, "fee": t.fee,
                 "amount": t.amount, "note": t.note, "created_at": _dt(t.created_at),
+                "holding_ref": t.holding_id,
             }
             for t in txns
         ],
@@ -104,24 +110,34 @@ def import_backup(
         session.refresh(plat)
         ref_map[p.get("ref")] = plat.id
 
-    # 3) 重建持仓
+    # 3) 重建持仓，记录 旧holding ref -> 新id
+    hold_map: Dict[Any, int] = {}
     for h in data.holdings:
         pid = ref_map.get(h.get("platform_ref"))
         if pid is None:
             continue  # 平台缺失则跳过该持仓
-        session.add(Holding(
+        holding = Holding(
             user_id=user.id, platform_id=pid,
             currency=h.get("currency", "CNY"), asset_type=h.get("asset_type", "stock"),
             market=h.get("market", "A"), symbol=h.get("symbol", ""), name=h.get("name", ""),
             quantity=h.get("quantity"), manual_value=h.get("manual_value"),
             cost_price=h.get("cost_price"), current_price=h.get("current_price"),
             prev_close=h.get("prev_close"),
-        ))
+            source=h.get("source", "manual"), status=h.get("status", "open"),
+            realized_pnl=h.get("realized_pnl", 0.0),
+            realized_income=h.get("realized_income", 0.0),
+        )
+        session.add(holding)
+        session.commit()
+        session.refresh(holding)
+        if h.get("ref") is not None:
+            hold_map[h.get("ref")] = holding.id
 
     # 4) 重建交易（平台可空）
     for t in data.transactions:
         session.add(Transaction(
             user_id=user.id, platform_id=ref_map.get(t.get("platform_ref")),
+            holding_id=hold_map.get(t.get("holding_ref")),
             date=t.get("date", ""), action=t.get("action", "buy"),
             name=t.get("name", ""), symbol=t.get("symbol", ""),
             currency=t.get("currency", "CNY"), quantity=t.get("quantity"),
@@ -137,6 +153,12 @@ def import_backup(
         ))
 
     session.commit()
+
+    # 6) derived 持仓按导入的交易重算（manual 持仓会被 recompute 跳过）
+    from position import recompute_holding
+    for hid in hold_map.values():
+        recompute_holding(session, hid)
+
     return {
         "ok": True,
         "platforms": len(data.platforms),
