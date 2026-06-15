@@ -1,7 +1,7 @@
 # Fly.io 部署配置。首次跑 `fly launch` 时它可能提示用已有此文件——选「是」即可，
 # 也可能把 app 名改成你输入的名字。region 选了东京(nrt)，海外/亚洲访问都快，
 # 想换地区见 https://fly.io/docs/reference/regions/
-app = "asset-manager"
+app = "tsfinancialsystem"
 primary_region = "nrt"
 
 [build]
