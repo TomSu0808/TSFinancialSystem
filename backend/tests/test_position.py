@@ -1,5 +1,14 @@
+from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel.pool import StaticPool
+from models import Holding, HoldingSource, HoldingStatus, Platform, User
 from models import Transaction, TxnAction
-from position import replay_transactions
+from position import replay_transactions, recompute_holding
+
+
+def _mem_session():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    SQLModel.metadata.create_all(engine)
+    return Session(engine)
 
 
 def _buy(date, q, price, fee=0.0):
@@ -48,3 +57,35 @@ def test_dividend_counts_as_income_only():
 def test_oversell_yields_negative_quantity_anomaly():
     st = replay_transactions([_buy("2026-01-01", 100, 10), _sell("2026-02-01", 150, 12)])
     assert st.quantity < 0
+
+
+def test_recompute_writes_back_and_closes():
+    s = _mem_session()
+    u = User(username="t", password_hash="x"); s.add(u); s.commit(); s.refresh(u)
+    p = Platform(user_id=u.id, name="P"); s.add(p); s.commit(); s.refresh(p)
+    h = Holding(user_id=u.id, platform_id=p.id, symbol="AAPL", source=HoldingSource.derived)
+    s.add(h); s.commit(); s.refresh(h)
+    s.add(Transaction(user_id=u.id, platform_id=p.id, holding_id=h.id,
+                      date="2026-01-01", action=TxnAction.buy, quantity=100, price=10))
+    s.add(Transaction(user_id=u.id, platform_id=p.id, holding_id=h.id,
+                      date="2026-02-01", action=TxnAction.sell, quantity=100, price=12))
+    s.commit()
+
+    recompute_holding(s, h.id)
+    s.refresh(h)
+    assert h.quantity == 0.0
+    assert h.status == HoldingStatus.closed
+    assert h.realized_pnl == 200.0
+
+
+def test_recompute_ignores_manual_holding():
+    s = _mem_session()
+    u = User(username="t", password_hash="x"); s.add(u); s.commit(); s.refresh(u)
+    p = Platform(user_id=u.id, name="P"); s.add(p); s.commit(); s.refresh(p)
+    h = Holding(user_id=u.id, platform_id=p.id, quantity=5, cost_price=3,
+                source=HoldingSource.manual)
+    s.add(h); s.commit(); s.refresh(h)
+    recompute_holding(s, h.id)
+    s.refresh(h)
+    assert h.quantity == 5
+    assert h.cost_price == 3
