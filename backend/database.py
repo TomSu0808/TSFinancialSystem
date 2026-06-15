@@ -38,21 +38,28 @@ def _migrate_add_user_id() -> None:
     # 表名 -> 需要补的列（列名: SQL 类型）
     wanted = {
         "platform": {"user_id": "INTEGER"},
-        "holding": {"user_id": "INTEGER"},
+        "holding": {
+            "user_id": "INTEGER",
+            "source": "VARCHAR DEFAULT 'manual'",
+            "status": "VARCHAR DEFAULT 'open'",
+            "realized_pnl": "FLOAT DEFAULT 0",
+            "realized_income": "FLOAT DEFAULT 0",
+        },
         "note": {"user_id": "INTEGER"},
         "snapshot": {"user_id": "INTEGER", "day": "VARCHAR"},
+        "transaction": {"holding_id": "INTEGER"},
     }
     with engine.connect() as conn:
         for table, columns in wanted.items():
             existing = {
                 row[1]  # PRAGMA table_info 第 2 列是列名
-                for row in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+                for row in conn.execute(text(f'PRAGMA table_info("{table}")')).fetchall()
             }
             if not existing:
                 continue  # 表还不存在（首次启动由 create_all 负责）
             for col, col_type in columns.items():
                 if col not in existing:
-                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}"))
+                    conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN {col} {col_type}'))
         conn.commit()
 
 
