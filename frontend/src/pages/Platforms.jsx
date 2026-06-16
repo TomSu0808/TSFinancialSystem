@@ -3,12 +3,12 @@ import { Link } from 'react-router-dom'
 import {
   Button, Card, Form, Input, Modal, Popconfirm, Progress, Segmented, Space, Table, Tag, message,
 } from 'antd'
-import { PlusOutlined } from '@ant-design/icons'
+import { PlusOutlined, LinkOutlined } from '@ant-design/icons'
 import {
   listPlatforms, createPlatform, updatePlatform, deletePlatform, listHoldings, getRate,
 } from '../api'
 import { CURRENCY_SYMBOL, ASSET_TYPE_LABEL, fmt } from '../constants'
-import { marketValue, costBasis, profitOf } from '../holdings'
+import { marketValue, costBasis, profitOf, isDerived } from '../holdings'
 
 export default function Platforms() {
   const [data, setData] = useState([])
@@ -102,7 +102,10 @@ export default function Platforms() {
         title: '名称', dataIndex: 'name',
         render: (t, r) => (
           <Space direction="vertical" size={0}>
-            <span>{t || '（未命名）'}</span>
+            <Space size={4}>
+              <span>{t || '（未命名）'}</span>
+              {isDerived(r) && <Tag color="blue" icon={<LinkOutlined />} style={{ marginInlineStart: 0 }}>流水</Tag>}
+            </Space>
             <span style={{ color: '#999', fontSize: 12 }}>
               {[ASSET_TYPE_LABEL[r.asset_type], r.symbol].filter(Boolean).join(' · ')}
             </span>
