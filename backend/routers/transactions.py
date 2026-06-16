@@ -36,21 +36,26 @@ def _owned(session: Session, txn_id: int, user: User) -> Transaction:
     return txn
 
 
-def _attach_and_recompute(session: Session, txn: Transaction, user: User) -> None:
-    """为买/卖流水绑定 derived 持仓（买入可自动建仓）并触发重算。"""
-    if txn.action not in (TxnAction.buy, TxnAction.sell):
-        return
-    if txn.holding_id is None:
+def _sync_txn_holding(session: Session, txn: Transaction, user: User) -> None:
+    """(重新)绑定 buy/sell/dividend 流水到其 derived 持仓，并重算受影响的持仓。
+    买入可自动建仓；卖出/分红只绑定已存在的 derived 持仓。改了 symbol/platform/currency
+    会重绑到新持仓，新旧持仓都会重算。"""
+    affected = set()
+    if txn.holding_id is not None:
+        affected.add(txn.holding_id)  # 旧绑定总要重算（动作/标的变更后释放其影响）
+    if txn.action in (TxnAction.buy, TxnAction.sell, TxnAction.dividend):
         holding = resolve_derived_holding(
             session, user, txn.platform_id, txn.symbol, txn.currency,
             name=txn.name, create_if_missing=(txn.action == TxnAction.buy),
         )
-        if holding is None:
-            return
-        txn.holding_id = holding.id
-        session.add(txn)
-        session.commit()
-    recompute_holding(session, txn.holding_id)
+        if holding is not None:
+            if txn.holding_id != holding.id:
+                txn.holding_id = holding.id
+                session.add(txn)
+                session.commit()
+            affected.add(holding.id)
+    for hid in affected:
+        recompute_holding(session, hid)
 
 
 @router.get("", response_model=List[Transaction])
@@ -78,7 +83,7 @@ def create_transaction(
     session.add(txn)
     session.commit()
     session.refresh(txn)
-    _attach_and_recompute(session, txn, user)
+    _sync_txn_holding(session, txn, user)
     session.refresh(txn)
     return txn
 
@@ -94,15 +99,12 @@ def update_transaction(
     values = data.model_dump(exclude_unset=True)
     if "platform_id" in values:
         _check_platform(session, values["platform_id"], user)
-    old_holding_id = txn.holding_id
     for key, value in values.items():
         setattr(txn, key, value)
     session.add(txn)
     session.commit()
     session.refresh(txn)
-    _attach_and_recompute(session, txn, user)
-    if old_holding_id is not None and old_holding_id != txn.holding_id:
-        recompute_holding(session, old_holding_id)
+    _sync_txn_holding(session, txn, user)
     session.refresh(txn)
     return txn
 

@@ -72,9 +72,9 @@ def update_holding(
     holding = _owned(session, holding_id, user)
     values = data.model_dump(exclude_unset=True)
     if holding.source == HoldingSource.derived and (
-        "quantity" in values or "cost_price" in values
+        {"quantity", "cost_price", "symbol", "currency", "platform_id"} & set(values)
     ):
-        raise HTTPException(400, "该持仓由交易流水驱动，请通过交易记录修改数量/成本")
+        raise HTTPException(400, "该持仓由交易流水驱动，请通过交易记录修改")
     if "platform_id" in values:
         _check_platform(session, values["platform_id"], user)
     for key, value in values.items():
@@ -92,6 +92,8 @@ def delete_holding(
     user: User = Depends(get_current_user),
 ):
     holding = _owned(session, holding_id, user)
+    if holding.source == HoldingSource.derived:
+        raise HTTPException(400, "该持仓由交易流水驱动，请删除其交易流水")
     session.delete(holding)
     session.commit()
     return {"ok": True}

@@ -105,3 +105,55 @@ def test_import_legacy_backup_without_new_fields(client):
     assert len(holds) == 1
     assert holds[0]["source"] == "manual"
     assert holds[0]["manual_value"] == 1000
+
+
+def test_dividend_updates_realized_income(client):
+    pid = _platform(client)
+    base = {"platform_id": pid, "symbol": "AAPL", "currency": "USD"}
+    client.post("/api/transactions", json={**base, "action": "buy", "date": "2026-01-01", "quantity": 100, "price": 10})
+    client.post("/api/transactions", json={**base, "action": "dividend", "date": "2026-03-01", "amount": 88})
+    derived = [h for h in client.get("/api/holdings").json() if h["source"] == "derived"][0]
+    assert derived["realized_income"] == 88.0
+
+
+def test_editing_action_to_deposit_recomputes_holding(client):
+    pid = _platform(client)
+    base = {"platform_id": pid, "symbol": "AAPL", "currency": "USD"}
+    r = client.post("/api/transactions", json={**base, "action": "buy", "date": "2026-01-01", "quantity": 100, "price": 10})
+    # change the buy into a deposit (no longer drives the position)
+    client.put(f"/api/transactions/{r.json()['id']}", json={"action": "deposit"})
+    derived = [h for h in client.get("/api/holdings?include_closed=true").json() if h["source"] == "derived"]
+    assert len(derived) == 1
+    assert derived[0]["quantity"] == 0.0          # buy no longer counts
+    assert derived[0]["status"] == "closed"
+
+
+def test_editing_symbol_rebinds_to_new_holding(client):
+    pid = _platform(client)
+    r = client.post("/api/transactions", json={
+        "platform_id": pid, "action": "buy", "date": "2026-01-01",
+        "symbol": "TSL", "name": "typo", "currency": "USD", "quantity": 10, "price": 5})
+    client.put(f"/api/transactions/{r.json()['id']}", json={"symbol": "TSLA"})
+    holds = client.get("/api/holdings?include_closed=true").json()
+    derived = {h["symbol"]: h for h in holds if h["source"] == "derived"}
+    # old TSL holding emptied (closed), new TSLA holding holds the 10 shares
+    assert derived["TSLA"]["quantity"] == 10
+    assert derived["TSL"]["status"] == "closed"
+
+
+def test_derived_holding_rejects_symbol_edit(client):
+    pid = _platform(client)
+    client.post("/api/transactions", json={
+        "platform_id": pid, "action": "buy", "date": "2026-01-01",
+        "symbol": "AAPL", "currency": "USD", "quantity": 100, "price": 10})
+    hid = [h for h in client.get("/api/holdings").json() if h["source"] == "derived"][0]["id"]
+    assert client.put(f"/api/holdings/{hid}", json={"symbol": "BABA"}).status_code == 400
+
+
+def test_derived_holding_cannot_be_deleted(client):
+    pid = _platform(client)
+    client.post("/api/transactions", json={
+        "platform_id": pid, "action": "buy", "date": "2026-01-01",
+        "symbol": "AAPL", "currency": "USD", "quantity": 100, "price": 10})
+    hid = [h for h in client.get("/api/holdings").json() if h["source"] == "derived"][0]["id"]
+    assert client.delete(f"/api/holdings/{hid}").status_code == 400
