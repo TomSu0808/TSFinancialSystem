@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import {
-  Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, message,
+  Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, message,
 } from 'antd'
-import { PlusOutlined, ReloadOutlined, ArrowLeftOutlined } from '@ant-design/icons'
+import { PlusOutlined, ReloadOutlined, ArrowLeftOutlined, LinkOutlined, WarningOutlined } from '@ant-design/icons'
 import {
   listPlatforms, listHoldings, createHolding, updateHolding, deleteHolding, refreshPrices,
 } from '../api'
 import {
   CURRENCIES, ASSET_TYPES, MARKETS, MARKET_LABEL, ASSET_TYPE_LABEL, CURRENCY_SYMBOL, fmt,
 } from '../constants'
-import { marketValue, dayChange, costBasis, profitOf } from '../holdings'
+import { marketValue, dayChange, costBasis, profitOf, isDerived, isClosed, isAnomalous } from '../holdings'
 
 export default function PlatformDetail() {
   const { id } = useParams()
@@ -19,6 +19,7 @@ export default function PlatformDetail() {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [showClosed, setShowClosed] = useState(false)
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form] = Form.useForm()
@@ -28,7 +29,7 @@ export default function PlatformDetail() {
     try {
       const [plats, holdings] = await Promise.all([
         listPlatforms(),
-        listHoldings({ platform_id: platformId }),
+        listHoldings({ platform_id: platformId, include_closed: showClosed }),
       ])
       setPlatform(plats.find((p) => p.id === platformId) || null)
       setData(holdings)
@@ -41,7 +42,7 @@ export default function PlatformDetail() {
 
   useEffect(() => {
     load()
-  }, [platformId])
+  }, [platformId, showClosed]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const doRefresh = async () => {
     setRefreshing(true)
@@ -96,7 +97,20 @@ export default function PlatformDetail() {
       title: '名称', dataIndex: 'name',
       render: (t, r) => (
         <Space direction="vertical" size={0}>
-          <span>{t || '（未命名）'}</span>
+          <Space size={4}>
+            <span>{t || '（未命名）'}</span>
+            {isDerived(r) && (
+              <Tooltip title="由交易流水计算：数量/成本只读，请到「交易记录」增删流水">
+                <Tag color="blue" icon={<LinkOutlined />} style={{ marginInlineStart: 0 }}>流水</Tag>
+              </Tooltip>
+            )}
+            {isClosed(r) && <Tag>已清仓</Tag>}
+            {isAnomalous(r) && (
+              <Tooltip title="持仓数量为负，可能漏录了买入，请检查交易流水">
+                <Tag color="warning" icon={<WarningOutlined />}>数量异常</Tag>
+              </Tooltip>
+            )}
+          </Space>
           <span style={{ color: '#999', fontSize: 12 }}>{r.symbol}</span>
         </Space>
       ),
@@ -148,13 +162,34 @@ export default function PlatformDetail() {
       },
     },
     {
+      title: '已实现', align: 'right',
+      render: (_, r) => {
+        const realized = (r.realized_pnl || 0) + (r.realized_income || 0)
+        if (!isDerived(r) || realized === 0) return '—'
+        const up = realized >= 0
+        return (
+          <Tooltip title={`已实现盈亏 ${fmt(r.realized_pnl || 0)} + 分红 ${fmt(r.realized_income || 0)}`}>
+            <span style={{ color: up ? '#cf1322' : '#3f8600' }}>
+              {up ? '+' : ''}{CURRENCY_SYMBOL[r.currency] || ''}{fmt(realized)}
+            </span>
+          </Tooltip>
+        )
+      },
+    },
+    {
       title: '操作', width: 130,
       render: (_, r) => (
         <Space>
           <a onClick={() => openEdit(r)}>编辑</a>
-          <Popconfirm title="删除该资产？" onConfirm={() => remove(r.id)}>
-            <a style={{ color: '#cf1322' }}>删除</a>
-          </Popconfirm>
+          {isDerived(r) ? (
+            <Tooltip title="该持仓由交易流水驱动，请在「交易记录」删除其流水">
+              <span style={{ color: '#ccc', cursor: 'not-allowed' }}>删除</span>
+            </Tooltip>
+          ) : (
+            <Popconfirm title="删除该资产？" onConfirm={() => remove(r.id)}>
+              <a style={{ color: '#cf1322' }}>删除</a>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -170,12 +205,17 @@ export default function PlatformDetail() {
       }
       extra={
         <Space>
+          <Space size={4}>
+            <span style={{ color: '#888', fontSize: 13 }}>显示已清仓</span>
+            <Switch size="small" checked={showClosed} onChange={setShowClosed} />
+          </Space>
           <Button icon={<ReloadOutlined />} loading={refreshing} onClick={doRefresh}>更新行情</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加资产</Button>
         </Space>
       }
     >
-      <Table rowKey="id" loading={loading} dataSource={data} columns={columns} pagination={false} scroll={{ x: 760 }} />
+      <Table rowKey="id" loading={loading} dataSource={data} columns={columns} pagination={false} scroll={{ x: 860 }}
+        rowClassName={(r) => (isClosed(r) ? 'row-closed' : '')} />
 
       <Modal
         title={editing ? '编辑资产' : '添加资产'}
