@@ -29,6 +29,7 @@ FinancialSystem/
 │  ├─ models.py                   ★核心：表模型 + API schema + 市值/涨跌计算口径
 │  ├─ price_provider.py           行情抓取（akshare / CoinGecko）
 │  ├─ fx_provider.py              汇率抓取（open.er-api.com，回退中行）
+│  ├─ position.py                 持仓派生计算（交易流水 → 数量/移动加权成本/已实现盈亏；replay_transactions / recompute_holding / resolve_derived_holding）
 │  ├─ requirements.txt            依赖
 │  ├─ data.db                     SQLite 数据库文件（运行时生成）
 │  └─ routers/
@@ -60,11 +61,12 @@ FinancialSystem/
 | 表 | 作用 | 关键字段 |
 |---|---|---|
 | `Platform` | 资产所在平台 | id, name, note |
-| `Holding`  | 一条持仓 | platform_id(FK), currency, asset_type, market, symbol, name, quantity, manual_value, cost_price, current_price, prev_close, price_updated_at |
+| `Holding`  | 一条持仓 | platform_id(FK), currency, asset_type, market, symbol, name, quantity, manual_value, cost_price, current_price, prev_close, price_updated_at; **新增**：`source`(manual/derived), `status`(open/closed), `realized_pnl`(已实现盈亏), `realized_income`(已实现收益/分红) |
+| `Transaction` | 交易流水 | platform_id(FK), date, action(buy/sell/dividend/deposit/withdraw/other), name, symbol, currency, quantity, price, fee, amount, note; **新增**：`holding_id`(FK → Holding，derived 持仓绑定) |
 | `FxRate`   | 汇率（单行，pair=USDCNY） | rate, updated_at |
 | `Snapshot` | 每次刷新埋点（为画历史曲线预留） | ts, total_cny, total_usd |
 
-**枚举**：`Currency`(CNY/USD/HKD) · `AssetType`(stock/etf/fund/bond/crypto/cash) · `Market`(A/HK/US/FUND/CRYPTO/NONE)
+**枚举**：`Currency`(CNY/USD/HKD) · `AssetType`(stock/etf/fund/bond/crypto/cash) · `Market`(A/HK/US/FUND/CRYPTO/NONE) · `HoldingSource`(manual/derived) · `HoldingStatus`(open/closed)
 
 **两个核心计算口径函数（改动需谨慎，前后端都依赖其语义）**：
 - `market_value(h)`：手填金额 `manual_value` 优先，否则 `quantity × current_price`，都没有记 0。
