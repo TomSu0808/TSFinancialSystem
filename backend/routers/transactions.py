@@ -39,7 +39,7 @@ def _owned(session: Session, txn_id: int, user: User) -> Transaction:
 def _sync_txn_holding(session: Session, txn: Transaction, user: User) -> None:
     """(重新)绑定 buy/sell/dividend 流水到其 derived 持仓，并重算受影响的持仓。
     买入可自动建仓；卖出/分红只绑定已存在的 derived 持仓。改了 symbol/platform/currency
-    会重绑到新持仓，新旧持仓都会重算。"""
+    会重绑到新持仓，新旧持仓都会重算。非持仓动作清空 holding_id，避免悬空 FK。"""
     affected = set()
     if txn.holding_id is not None:
         affected.add(txn.holding_id)  # 旧绑定总要重算（动作/标的变更后释放其影响）
@@ -54,6 +54,12 @@ def _sync_txn_holding(session: Session, txn: Transaction, user: User) -> None:
                 session.add(txn)
                 session.commit()
             affected.add(holding.id)
+    else:
+        # Non-position action: clear any dangling holding_id FK
+        if txn.holding_id is not None:
+            txn.holding_id = None
+            session.add(txn)
+            session.commit()
     for hid in affected:
         recompute_holding(session, hid)
 
@@ -80,6 +86,7 @@ def create_transaction(
 ):
     _check_platform(session, data.platform_id, user)
     txn = Transaction.model_validate(data, update={"user_id": user.id})
+    txn.holding_id = None  # always system-resolved; never trust client input
     session.add(txn)
     session.commit()
     session.refresh(txn)
@@ -97,6 +104,7 @@ def update_transaction(
 ):
     txn = _owned(session, txn_id, user)
     values = data.model_dump(exclude_unset=True)
+    values.pop("holding_id", None)  # holding_id is system-managed; ignore client input
     if "platform_id" in values:
         _check_platform(session, values["platform_id"], user)
     for key, value in values.items():

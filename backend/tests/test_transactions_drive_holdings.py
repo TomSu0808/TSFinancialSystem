@@ -157,3 +157,25 @@ def test_derived_holding_cannot_be_deleted(client):
         "symbol": "AAPL", "currency": "USD", "quantity": 100, "price": 10})
     hid = [h for h in client.get("/api/holdings").json() if h["source"] == "derived"][0]["id"]
     assert client.delete(f"/api/holdings/{hid}").status_code == 400
+
+
+def test_client_supplied_holding_id_is_ignored_on_create(client):
+    pid = _platform(client)
+    # bogus holding_id 99999 must not stick; system resolves its own derived holding
+    r = client.post("/api/transactions", json={
+        "platform_id": pid, "action": "buy", "date": "2026-01-01",
+        "symbol": "AAPL", "currency": "USD", "quantity": 100, "price": 10,
+        "holding_id": 99999})
+    assert r.status_code == 200
+    derived = [h for h in client.get("/api/holdings").json() if h["source"] == "derived"][0]
+    txns = client.get("/api/transactions").json()
+    assert txns[0]["holding_id"] == derived["id"]      # bound to the real holding, not 99999
+
+
+def test_action_change_to_deposit_clears_holding_id(client):
+    pid = _platform(client)
+    base = {"platform_id": pid, "symbol": "AAPL", "currency": "USD"}
+    r = client.post("/api/transactions", json={**base, "action": "buy", "date": "2026-01-01", "quantity": 100, "price": 10})
+    client.put(f"/api/transactions/{r.json()['id']}", json={"action": "deposit"})
+    txn = [t for t in client.get("/api/transactions").json() if t["id"] == r.json()["id"]][0]
+    assert txn["holding_id"] is None
