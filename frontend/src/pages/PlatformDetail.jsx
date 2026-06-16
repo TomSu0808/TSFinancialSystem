@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import {
-  Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, message,
+  Button, Card, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Space, Switch, Table, Tag, Tooltip, message,
 } from 'antd'
 import { PlusOutlined, ReloadOutlined, ArrowLeftOutlined, LinkOutlined, WarningOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import {
-  listPlatforms, listHoldings, createHolding, updateHolding, deleteHolding, refreshPrices,
+  listPlatforms, listHoldings, createHolding, updateHolding, deleteHolding, refreshPrices, createTransaction,
 } from '../api'
 import {
   CURRENCIES, ASSET_TYPES, MARKETS, MARKET_LABEL, ASSET_TYPE_LABEL, CURRENCY_SYMBOL, fmt,
@@ -22,6 +23,7 @@ export default function PlatformDetail() {
   const [showClosed, setShowClosed] = useState(false)
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(null)
+  const [mode, setMode] = useState('derived')
   const [form] = Form.useForm()
 
   const load = async () => {
@@ -59,12 +61,14 @@ export default function PlatformDetail() {
 
   const openAdd = () => {
     setEditing(null)
+    setMode('derived')
     form.resetFields()
-    form.setFieldsValue({ currency: 'CNY', asset_type: 'stock', market: 'A' })
+    form.setFieldsValue({ currency: 'CNY', asset_type: 'stock', market: 'A', date: dayjs() })
     setOpen(true)
   }
   const openEdit = (r) => {
     setEditing(r)
+    setMode(r.source === 'derived' ? 'derived' : 'manual')
     form.setFieldsValue(r)
     setOpen(true)
   }
@@ -72,13 +76,28 @@ export default function PlatformDetail() {
   const submit = async () => {
     const values = await form.validateFields()
     try {
-      if (editing) await updateHolding(editing.id, values)
-      else await createHolding({ ...values, platform_id: platformId })
+      if (editing) {
+        // 编辑：derived 持仓只改可改字段；数量/成本由流水决定
+        const patch = editing.source === 'derived'
+          ? { name: values.name, asset_type: values.asset_type, market: values.market }
+          : values
+        await updateHolding(editing.id, patch)
+      } else if (mode === 'derived') {
+        // 按交易记录：记一笔买入，后端自动建/更新 derived 持仓
+        await createTransaction({
+          platform_id: platformId, action: 'buy',
+          date: values.date ? values.date.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
+          name: values.name, symbol: values.symbol, currency: values.currency,
+          quantity: values.quantity, price: values.price, fee: values.fee,
+        })
+      } else {
+        await createHolding({ ...values, platform_id: platformId, source: 'manual' })
+      }
       message.success('已保存')
       setOpen(false)
       load()
     } catch (e) {
-      message.error('保存失败：' + e.message)
+      message.error('保存失败：' + (e.response?.data?.detail || e.message))
     }
   }
 
@@ -225,6 +244,18 @@ export default function PlatformDetail() {
         destroyOnHidden
       >
         <Form form={form} layout="vertical">
+          {!editing && (
+            <Segmented
+              block
+              value={mode}
+              onChange={setMode}
+              style={{ marginBottom: 16 }}
+              options={[
+                { label: '按交易记录（推荐）', value: 'derived' },
+                { label: '直接手填', value: 'manual' },
+              ]}
+            />
+          )}
           <Space style={{ display: 'flex' }}>
             <Form.Item name="currency" label="币种" rules={[{ required: true }]} style={{ flex: 1 }}>
               <Select options={CURRENCIES} />
@@ -242,17 +273,39 @@ export default function PlatformDetail() {
           <Form.Item name="symbol" label="代码" extra="A股如 600519，美股如 AAPL，港股如 00700，基金填基金代码；现金可留空">
             <Input placeholder="行情代码" />
           </Form.Item>
-          <Space style={{ display: 'flex' }}>
-            <Form.Item name="quantity" label="持有数量/份额" style={{ flex: 1 }}>
-              <InputNumber style={{ width: '100%' }} placeholder="股数/份额" />
-            </Form.Item>
-            <Form.Item name="cost_price" label="成本价（可选）" style={{ flex: 1 }}>
-              <InputNumber style={{ width: '100%' }} placeholder="用于盈亏" />
-            </Form.Item>
-            <Form.Item name="manual_value" label="手填市值（无法抓价时）" style={{ flex: 1.2 }}>
-              <InputNumber style={{ width: '100%' }} placeholder="现金/债券等直接填金额" />
-            </Form.Item>
-          </Space>
+          {(mode === 'derived' && !editing) ? (
+            <Space style={{ display: 'flex' }}>
+              <Form.Item name="date" label="买入日期" rules={[{ required: true }]} style={{ flex: 1 }}>
+                <DatePicker style={{ width: '100%' }} />
+              </Form.Item>
+              <Form.Item name="quantity" label="买入数量" rules={[{ required: true }]} style={{ flex: 1 }}>
+                <InputNumber style={{ width: '100%' }} placeholder="股数/份额" />
+              </Form.Item>
+              <Form.Item name="price" label="买入价" rules={[{ required: true }]} style={{ flex: 1 }}>
+                <InputNumber style={{ width: '100%' }} placeholder="成交价" />
+              </Form.Item>
+              <Form.Item name="fee" label="费用" style={{ flex: 1 }}>
+                <InputNumber style={{ width: '100%' }} placeholder="手续费" />
+              </Form.Item>
+            </Space>
+          ) : (
+            <Space style={{ display: 'flex' }}>
+              <Form.Item name="quantity" label="持有数量/份额" style={{ flex: 1 }}>
+                <InputNumber style={{ width: '100%' }} placeholder="股数/份额" disabled={editing?.source === 'derived'} />
+              </Form.Item>
+              <Form.Item name="cost_price" label="成本价（可选）" style={{ flex: 1 }}>
+                <InputNumber style={{ width: '100%' }} placeholder="用于盈亏" disabled={editing?.source === 'derived'} />
+              </Form.Item>
+              <Form.Item name="manual_value" label="手填市值（无法抓价时）" style={{ flex: 1.2 }}>
+                <InputNumber style={{ width: '100%' }} placeholder="现金/债券等直接填金额" disabled={editing?.source === 'derived'} />
+              </Form.Item>
+            </Space>
+          )}
+          {editing?.source === 'derived' && (
+            <div style={{ color: '#888', fontSize: 12, marginTop: -8 }}>
+              数量与成本由交易流水自动计算，如需调整请到「交易记录」增删对应流水。
+            </div>
+          )}
         </Form>
       </Modal>
     </Card>
