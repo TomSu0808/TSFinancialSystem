@@ -40,6 +40,12 @@ export const ASSET_TYPE_LABEL = toMap(ASSET_TYPES)
 export const MARKET_LABEL = toMap(MARKETS)
 export const TXN_ACTION_LABEL = toMap(TXN_ACTIONS)
 
+export const HOLDING_SOURCES = [
+  { value: 'manual', label: '手填' },
+  { value: 'derived', label: '交易驱动' },
+]
+export const HOLDING_SOURCE_LABEL = toMap(HOLDING_SOURCES)
+
 export const CURRENCY_SYMBOL = { CNY: '¥', USD: '$', HKD: 'HK$' }
 
 // 隐私模式：开启后所有金额（经 fmt 输出的）显示为 ****

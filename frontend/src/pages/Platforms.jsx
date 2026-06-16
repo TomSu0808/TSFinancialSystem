@@ -8,16 +8,7 @@ import {
   listPlatforms, createPlatform, updatePlatform, deletePlatform, listHoldings, getRate,
 } from '../api'
 import { CURRENCY_SYMBOL, ASSET_TYPE_LABEL, fmt } from '../constants'
-
-// 与后端 models.market_value 保持一致
-const marketValue = (h) =>
-  h.manual_value != null ? h.manual_value
-    : h.quantity != null && h.current_price != null ? h.quantity * h.current_price : 0
-const costBasis = (h) => (h.quantity != null && h.cost_price != null ? h.quantity * h.cost_price : null)
-const profitOf = (h) => {
-  const cb = costBasis(h)
-  return cb == null ? null : marketValue(h) - cb
-}
+import { marketValue, costBasis, profitOf } from '../holdings'
 
 export default function Platforms() {
   const [data, setData] = useState([])

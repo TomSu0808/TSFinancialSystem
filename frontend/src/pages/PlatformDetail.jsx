@@ -10,20 +10,7 @@ import {
 import {
   CURRENCIES, ASSET_TYPES, MARKETS, MARKET_LABEL, ASSET_TYPE_LABEL, CURRENCY_SYMBOL, fmt,
 } from '../constants'
-
-// 与后端 models.market_value / day_change 保持一致的前端口径
-const marketValue = (h) =>
-  h.manual_value != null ? h.manual_value
-    : h.quantity != null && h.current_price != null ? h.quantity * h.current_price : 0
-const dayChange = (h) =>
-  h.manual_value != null ? 0
-    : h.quantity != null && h.current_price != null && h.prev_close != null
-      ? h.quantity * (h.current_price - h.prev_close) : 0
-const costBasis = (h) => (h.quantity != null && h.cost_price != null ? h.quantity * h.cost_price : null)
-const profitOf = (h) => {
-  const cb = costBasis(h)
-  return cb == null ? null : marketValue(h) - cb
-}
+import { marketValue, dayChange, costBasis, profitOf } from '../holdings'
 
 export default function PlatformDetail() {
   const { id } = useParams()
