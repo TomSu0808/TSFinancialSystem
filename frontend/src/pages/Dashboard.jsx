@@ -70,6 +70,12 @@ export default function Dashboard({ autoRefresh = false }) {
   const profitUp = totalProfit >= 0
   const profitColor = profitUp ? RED : GREEN
 
+  const realizedPnl = summary?.realized_pnl ?? 0
+  const realizedIncome = summary?.realized_income ?? 0
+  const totalReturn = summary?.total_return ?? totalProfit
+  const returnUp = totalReturn >= 0
+  const returnColor = returnUp ? RED : GREEN
+
   const pie = (data, nameKey, mapName) => ({
     tooltip: {
       trigger: 'item',
@@ -122,12 +128,20 @@ export default function Dashboard({ autoRefresh = false }) {
                   <span style={{ color: '#aaa' }}>今日</span>
                 </Space>
                 <Space size={4}>
-                  <span style={{ color: profitColor, fontSize: 16 }}>
-                    {profitUp ? '+' : ''}{sym}{fmt(totalProfit)}
+                  <span style={{ color: returnColor, fontSize: 16 }}>
+                    {returnUp ? '+' : ''}{sym}{fmt(totalReturn)}
                   </span>
-                  <span style={{ color: profitColor }}>({profitUp ? '+' : ''}{summary?.profit_pct ?? 0}%)</span>
-                  <Tooltip title="市值 − 成本，仅统计填了成本价的资产">
-                    <span style={{ color: '#aaa' }}>累计盈亏</span>
+                  <Tooltip
+                    title={(
+                      <div>
+                        <div>未实现盈亏：{sym}{fmt(totalProfit)}</div>
+                        <div>已实现盈亏：{sym}{fmt(realizedPnl)}</div>
+                        <div>分红/利息：{sym}{fmt(realizedIncome)}</div>
+                        <div style={{ color: '#aaa', marginTop: 4 }}>总收益 = 三项之和</div>
+                      </div>
+                    )}
+                  >
+                    <span style={{ color: '#aaa' }}>总收益 ⓘ</span>
                   </Tooltip>
                 </Space>
               </Space>

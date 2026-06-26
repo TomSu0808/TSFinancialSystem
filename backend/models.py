@@ -34,6 +34,16 @@ class Market(str, Enum):
     NONE = "NONE"    # 不抓价（现金/债券等手填金额）
 
 
+class HoldingSource(str, Enum):
+    manual = "manual"      # 手填型：数量/成本用户直接维护
+    derived = "derived"    # 交易驱动型：数量/成本由交易流水派生
+
+
+class HoldingStatus(str, Enum):
+    open = "open"
+    closed = "closed"      # 清仓（数量归零），主列表默认隐藏
+
+
 # ----------------------------- 表 -----------------------------
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -65,6 +75,10 @@ class Holding(SQLModel, table=True):
     current_price: Optional[float] = None  # 当前价（刷新写入）
     prev_close: Optional[float] = None     # 昨收（刷新写入，算今日涨跌）
     price_updated_at: Optional[datetime] = None
+    source: HoldingSource = HoldingSource.manual
+    status: HoldingStatus = HoldingStatus.open
+    realized_pnl: float = 0.0       # 累计已实现盈亏（derived）
+    realized_income: float = 0.0    # 累计分红/利息（derived）
 
 
 class FxRate(SQLModel, table=True):
@@ -96,6 +110,7 @@ class Transaction(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
     platform_id: Optional[int] = Field(default=None, foreign_key="platform.id", index=True)
+    holding_id: Optional[int] = Field(default=None, foreign_key="holding.id", index=True)
     date: str = ""                       # YYYY-MM-DD
     action: TxnAction = TxnAction.buy
     name: str = ""
@@ -140,6 +155,7 @@ class HoldingCreate(SQLModel):
     quantity: Optional[float] = None
     manual_value: Optional[float] = None
     cost_price: Optional[float] = None
+    source: HoldingSource = HoldingSource.manual
 
 
 class HoldingUpdate(SQLModel):
@@ -184,6 +200,7 @@ class Token(SQLModel):
 
 class TransactionCreate(SQLModel):
     platform_id: Optional[int] = None
+    holding_id: Optional[int] = None
     date: str = ""
     action: TxnAction = TxnAction.buy
     name: str = ""
@@ -198,6 +215,7 @@ class TransactionCreate(SQLModel):
 
 class TransactionUpdate(SQLModel):
     platform_id: Optional[int] = None
+    holding_id: Optional[int] = None
     date: Optional[str] = None
     action: Optional[TxnAction] = None
     name: Optional[str] = None

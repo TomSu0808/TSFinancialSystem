@@ -75,7 +75,8 @@ export default function Transactions() {
     try {
       if (editing) await updateTransaction(editing.id, payload)
       else await createTransaction(payload)
-      message.success('已保存')
+      const drives = ['buy', 'sell', 'dividend'].includes(payload.action)
+      message.success(drives ? '已保存，相关持仓已同步' : '已保存')
       setOpen(false)
       load()
     } catch (e) {
@@ -142,7 +143,8 @@ export default function Transactions() {
       extra={<Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>记一笔</Button>}
     >
       <div style={{ marginBottom: 12, color: '#888', fontSize: 13 }}>
-        独立流水账本，仅作记录，不会自动改变你的持仓。
+        买入/卖出会自动更新对应持仓（按 平台 + 代码 + 币种 匹配）的数量与移动加权成本；
+        分红计入已实现收益。入金/出金/其它仅作记录。
       </div>
       <Table
         rowKey="id"

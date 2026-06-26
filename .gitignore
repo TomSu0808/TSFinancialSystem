@@ -1,5 +1,6 @@
 # Python
 backend/.venv/
+backend/.venv-*/
 backend/.venv_broken_mac/
 __pycache__/
 *.pyc
