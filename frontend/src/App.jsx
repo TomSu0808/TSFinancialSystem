@@ -7,12 +7,14 @@ import {
   DashboardOutlined, AppstoreOutlined, ReadOutlined, SwapOutlined,
   UserOutlined, LogoutOutlined, DownloadOutlined, UploadOutlined,
   EyeOutlined, EyeInvisibleOutlined, BulbOutlined, KeyOutlined, SyncOutlined,
+  FundOutlined,
 } from '@ant-design/icons'
 import { Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import Dashboard from './pages/Dashboard.jsx'
 import Platforms from './pages/Platforms.jsx'
 import PlatformDetail from './pages/PlatformDetail.jsx'
 import Notes from './pages/Notes.jsx'
+import Research from './pages/Research.jsx'
 import Transactions from './pages/Transactions.jsx'
 import Login from './pages/Login.jsx'
 import {
@@ -135,13 +137,16 @@ export default function App() {
       ? '/transactions'
       : location.pathname.startsWith('/notes')
         ? '/notes'
-        : '/'
+        : location.pathname.startsWith('/research')
+          ? '/research'
+          : '/'
 
   const items = [
     { key: '/', icon: <DashboardOutlined />, label: <Link to="/">总览</Link> },
     { key: '/platforms', icon: <AppstoreOutlined />, label: <Link to="/platforms">平台管理</Link> },
     { key: '/transactions', icon: <SwapOutlined />, label: <Link to="/transactions">交易记录</Link> },
     { key: '/notes', icon: <ReadOutlined />, label: <Link to="/notes">投资心得</Link> },
+    { key: '/research', icon: <FundOutlined />, label: <Link to="/research">投研</Link> },
   ]
 
   const userMenu = {
@@ -196,6 +201,7 @@ export default function App() {
             <Route path="/platforms/:id" element={<PlatformDetail />} />
             <Route path="/transactions" element={<Transactions />} />
             <Route path="/notes" element={<Notes />} />
+            <Route path="/research" element={<Research />} />
           </Routes>
         </Content>
       </Layout>

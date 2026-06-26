@@ -14,6 +14,7 @@
 import os
 import platform
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -117,7 +118,7 @@ def select_venv() -> None:
 
 
 def deps_installed() -> bool:
-    return _check("import fastapi, uvicorn, sqlmodel, akshare")
+    return _check("import fastapi, uvicorn, sqlmodel, akshare, openai")
 
 
 def ensure_backend() -> None:
@@ -171,6 +172,56 @@ def kill_by_port(*ports) -> None:
         subprocess.run(f"lsof -ti {colon} | xargs kill -9", shell=True)
 
 
+def port_listeners(*ports) -> list[tuple[int, str]]:
+    """Return listening processes for the given ports as (port, pid) pairs."""
+    if IS_WIN:
+        script = (
+            f"$ports=@({','.join(str(p) for p in ports)}); "
+            "Get-NetTCPConnection -LocalPort $ports -State Listen "
+            "-ErrorAction SilentlyContinue | "
+            "Select-Object LocalPort,OwningProcess | "
+            "ForEach-Object { \"$($_.LocalPort) $($_.OwningProcess)\" }"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True, text=True, env=child_env(),
+        )
+        rows: list[tuple[int, str]] = []
+        for line in result.stdout.splitlines():
+            parts = line.strip().split()
+            if len(parts) == 2:
+                rows.append((int(parts[0]), parts[1]))
+        return rows
+
+    rows = []
+    for port in ports:
+        result = subprocess.run(
+            ["sh", "-c", f"lsof -ti :{port}"],
+            capture_output=True, text=True,
+        )
+        for pid in result.stdout.splitlines():
+            if pid.strip():
+                rows.append((port, pid.strip()))
+    return rows
+
+
+def find_free_port(start_port: int, attempts: int = 20) -> int:
+    """Find a localhost port that can be bound by a new server."""
+    for port in range(start_port, start_port + attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.2)
+            if probe.connect_ex(("127.0.0.1", port)) == 0:
+                continue
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    raise RuntimeError(f"找不到可用端口：{start_port}-{start_port + attempts - 1}")
+
+
 def stop() -> None:
     print("停止后端(8000)与前端(5173)…", flush=True)
     kill_by_port(BACKEND_PORT, FRONTEND_PORT)
@@ -181,18 +232,32 @@ def start() -> None:
     ensure_backend()
     ensure_frontend()
 
-    print("\n启动中：后端 http://localhost:8000 ｜ 前端 http://localhost:5173", flush=True)
+    backend_port = find_free_port(BACKEND_PORT)
+    frontend_port = find_free_port(FRONTEND_PORT)
+    if backend_port != BACKEND_PORT:
+        listeners = port_listeners(BACKEND_PORT)
+        detail = ", ".join(f"{port}->PID {pid}" for port, pid in listeners) or "未知进程"
+        print(f"[!] 端口 {BACKEND_PORT} 被占用（{detail}），本次改用后端端口 {backend_port}", flush=True)
+    if frontend_port != FRONTEND_PORT:
+        print(f"[!] 端口 {FRONTEND_PORT} 被占用，本次改用前端端口 {frontend_port}", flush=True)
+
+    print(f"\n启动中：后端 http://localhost:{backend_port} ｜ 前端 http://localhost:{frontend_port}", flush=True)
     print("（两个服务的日志都会打印在本窗口；按 Ctrl+C 同时停止）\n", flush=True)
 
     backend = subprocess.Popen(
-        [str(VENV_PY), "-m", "uvicorn", "main:app", "--reload",
-         "--port", str(BACKEND_PORT)],
+        [str(VENV_PY), "-m", "uvicorn", "main:app",
+         "--port", str(backend_port)],
         cwd=str(BACKEND), env=child_env(),
     )
-    frontend = subprocess.Popen([npm_cmd(), "run", "dev"], cwd=str(FRONTEND))
+    frontend_env = child_env()
+    frontend_env["BACKEND_PORT"] = str(backend_port)
+    frontend = subprocess.Popen(
+        [npm_cmd(), "run", "dev", "--", "--port", str(frontend_port)],
+        cwd=str(FRONTEND), env=frontend_env,
+    )
 
     threading.Timer(
-        7.0, lambda: webbrowser.open(f"http://localhost:{FRONTEND_PORT}")
+        7.0, lambda: webbrowser.open(f"http://localhost:{frontend_port}")
     ).start()
 
     try:

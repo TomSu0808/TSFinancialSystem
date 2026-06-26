@@ -238,6 +238,82 @@ class NoteUpdate(SQLModel):
     content: Optional[str] = None
 
 
+class ResearchStatus(str, Enum):
+    draft = "draft"
+    prompt_ready = "prompt_ready"  # legacy
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class ReportLanguage(str, Enum):
+    zh = "zh"
+    en = "en"
+
+
+class ResearchReport(SQLModel, table=True):
+    """投研报告：AI 投研工作台生成的结构化研究记录。"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    template_key: str = ""
+    title: str = ""
+    target_name: str = ""
+    symbol: Optional[str] = None
+    market: Optional[str] = None
+    report_language: str = "zh"           # ReportLanguage values
+    related_holding_id: Optional[int] = Field(default=None, foreign_key="holding.id")
+    status: str = "draft"                 # ResearchStatus values
+    input_context_md: Optional[str] = None
+    skill_md: Optional[str] = None        # snapshot of the AI Berkshire skill used
+    prompt_md: Optional[str] = None
+    report_md: Optional[str] = None
+    sources_json: Optional[str] = None
+    error_message: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    provider_response_id: Optional[str] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ResearchRunCreate(SQLModel):
+    template_key: str
+    target_name: Optional[str] = None
+    symbol: Optional[str] = None
+    market: Optional[str] = None
+    related_holding_id: Optional[int] = None
+    report_language: ReportLanguage = ReportLanguage.zh
+    ai_provider: Optional[str] = None
+    ai_model: Optional[str] = None
+    extra_instruction: Optional[str] = None
+    use_web_search: bool = True
+
+
+class ResearchReportCreate(SQLModel):
+    template_key: str
+    title: str
+    target_name: str
+    symbol: Optional[str] = None
+    market: Optional[str] = None
+    related_holding_id: Optional[int] = None
+    report_language: ReportLanguage = ReportLanguage.zh
+
+
+class ResearchReportUpdate(SQLModel):
+    title: Optional[str] = None
+    target_name: Optional[str] = None
+    symbol: Optional[str] = None
+    market: Optional[str] = None
+    status: Optional[str] = None
+    report_language: Optional[str] = None
+    prompt_md: Optional[str] = None
+    report_md: Optional[str] = None
+
+
 def market_value(h: Holding) -> float:
     """统一市值口径：手填金额优先，否则数量×现价。"""
     if h.manual_value is not None:

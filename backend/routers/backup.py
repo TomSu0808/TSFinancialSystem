@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 
 from auth import get_current_user
 from database import get_session
-from models import Holding, Note, Platform, Transaction, User
+from models import Holding, Note, Platform, ResearchReport, Transaction, User
 
 router = APIRouter(prefix="/api/backup", tags=["backup"])
 
@@ -35,6 +35,7 @@ def export_backup(
     holds = session.exec(select(Holding).where(Holding.user_id == user.id)).all()
     notes = session.exec(select(Note).where(Note.user_id == user.id)).all()
     txns = session.exec(select(Transaction).where(Transaction.user_id == user.id)).all()
+    reports = session.exec(select(ResearchReport).where(ResearchReport.user_id == user.id)).all()
 
     return {
         "version": VERSION,
@@ -78,6 +79,28 @@ def export_backup(
             }
             for t in txns
         ],
+        "research_reports": [
+            {
+                "template_key": r.template_key,
+                "title": r.title,
+                "target_name": r.target_name,
+                "symbol": r.symbol,
+                "market": r.market,
+                "report_language": r.report_language,
+                "status": r.status,
+                "input_context_md": r.input_context_md,
+                "skill_md": r.skill_md,
+                "prompt_md": r.prompt_md,
+                "report_md": r.report_md,
+                "sources_json": r.sources_json,
+                "provider": r.provider,
+                "model": r.model,
+                "created_at": _dt(r.created_at),
+                "updated_at": _dt(r.updated_at),
+                "completed_at": _dt(r.completed_at) if r.completed_at else None,
+            }
+            for r in reports
+        ],
     }
 
 
@@ -86,6 +109,7 @@ class ImportPayload(BaseModel):
     holdings: List[Dict[str, Any]] = []
     notes: List[Dict[str, Any]] = []
     transactions: List[Dict[str, Any]] = []
+    research_reports: List[Dict[str, Any]] = []
 
 
 @router.post("/import")
@@ -96,7 +120,7 @@ def import_backup(
 ) -> Dict[str, Any]:
     """覆盖式恢复：先清空当前用户的全部数据，再按备份重建。"""
     # 1) 清空当前用户数据（先子后父）
-    for model in (Transaction, Holding, Note, Platform):
+    for model in (ResearchReport, Transaction, Holding, Note, Platform):
         for row in session.exec(select(model).where(model.user_id == user.id)).all():
             session.delete(row)
     session.commit()
@@ -159,10 +183,37 @@ def import_backup(
     for hid in hold_map.values():
         recompute_holding(session, hid)
 
+    # 7) 重建投研报告（provider_response_id 不恢复，相关联 holding 不重映射）
+    for r in data.research_reports:
+        completed_at_raw = r.get("completed_at")
+        session.add(ResearchReport(
+            user_id=user.id,
+            template_key=r.get("template_key", ""),
+            title=r.get("title", ""),
+            target_name=r.get("target_name", ""),
+            symbol=r.get("symbol"),
+            market=r.get("market"),
+            report_language=r.get("report_language", "zh"),
+            status=r.get("status", "draft"),
+            input_context_md=r.get("input_context_md"),
+            skill_md=r.get("skill_md"),
+            prompt_md=r.get("prompt_md"),
+            report_md=r.get("report_md"),
+            sources_json=r.get("sources_json"),
+            provider=r.get("provider"),
+            model=r.get("model"),
+            created_at=_parse_dt(r.get("created_at")),
+            updated_at=_parse_dt(r.get("updated_at")),
+            completed_at=_parse_dt(completed_at_raw) if completed_at_raw else None,
+        ))
+
+    session.commit()
+
     return {
         "ok": True,
         "platforms": len(data.platforms),
         "holdings": len(data.holdings),
         "transactions": len(data.transactions),
         "notes": len(data.notes),
+        "research_reports": len(data.research_reports),
     }

@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 // 同源 /api，由 Vite 代理到后端；上云后前后端同域也无需改
-const client = axios.create({ baseURL: '/api', timeout: 60000 })
+const client = axios.create({ baseURL: '/api', timeout: 300000 })
 
 // ---- 登录态（token 存 localStorage）----
 const TOKEN_KEY = 'token'
@@ -94,5 +94,18 @@ export const deleteTransaction = (id) => client.delete(`/transactions/${id}`).th
 // ---- 备份 ----
 export const exportBackup = () => client.get('/backup').then((r) => r.data)
 export const importBackup = (payload) => client.post('/backup/import', payload).then((r) => r.data)
+
+// ---- 投研工作台 ----
+export const listResearchTemplates = () => client.get('/research/templates').then((r) => r.data)
+export const generateResearchPrompt = (data) => client.post('/research/prompts', data).then((r) => r.data)
+export const listResearchReports = (params) => client.get('/research/reports', { params }).then((r) => r.data)
+export const createResearchReport = (data) => client.post('/research/reports', data).then((r) => r.data)
+export const getResearchReport = (id) => client.get(`/research/reports/${id}`).then((r) => r.data)
+export const updateResearchReport = (id, data) => client.put(`/research/reports/${id}`, data).then((r) => r.data)
+export const deleteResearchReport = (id) => client.delete(`/research/reports/${id}`).then((r) => r.data)
+// AI 投研任务（直接调用 AI，无需手动复制 prompt）
+export const createResearchRun = (data) => client.post('/research/runs', data).then((r) => r.data)
+export const refreshResearchRun = (id) => client.post(`/research/runs/${id}/refresh`).then((r) => r.data)
+export const cancelResearchReport = (id) => client.post(`/research/reports/${id}/cancel`).then((r) => r.data)
 
 export default client

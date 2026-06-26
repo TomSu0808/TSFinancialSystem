@@ -14,6 +14,9 @@ backend/.env
 frontend/node_modules/
 frontend/dist/
 
+# Playwright MCP session artifacts
+.playwright-mcp/
+
 # Editor / OS
 .vscode/
 .DS_Store
