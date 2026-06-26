@@ -30,10 +30,6 @@ rates on demand, and see total net worth, daily change, and cumulative P&L at a 
 > access from your phone or computer over HTTPS.
 > 前后端分离 + 容器化，可一键上云，手机 / 电脑随时随地访问。
 
-<div align="center">
-  <img src="./dashboard.png" alt="Dashboard preview" width="760">
-</div>
-
 ---
 
 ## ✨ Features · 功能特性
