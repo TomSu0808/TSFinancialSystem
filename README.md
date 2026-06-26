@@ -40,12 +40,13 @@ rates on demand, and see total net worth, daily change, and cumulative P&L at a 
 
 | | Feature | 说明 |
 |---|---|---|
-| 📊 | **Unified dashboard** | 总览：总资产、今日涨跌、累计盈亏，¥/$ 一键切换 |
+| 📊 | **Unified dashboard** | 总览：总资产、今日涨跌、未实现/已实现盈亏 + 分红，¥/$ 一键切换 |
 | 🏦 | **Platform & holdings management** | 按平台分组管理持仓，查看各平台市值与仓位占比 |
 | 📈 | **Live quotes & FX** | A 股 / 港股 / 美股 / 基金 / 加密实时行情 + USD·CNY 汇率，手动刷新最可控 |
 | 💹 | **P&L & net-worth trend** | 基于成本价的累计盈亏，每日净值快照绘制资产走势曲线 |
 | 🥧 | **Allocation insights** | 按资产类型与平台的配置占比饼图 |
-| 🧾 | **Transaction ledger** | 独立流水账（买入 / 卖出 / 分红 / 入金 / 出金） |
+| 🧾 | **Transaction-driven holdings** | 买入/卖出流水自动驱动持仓数量与移动加权成本；卖出结转已实现盈亏；分红计入已实现收益 |
+| 📒 | **Investment journal** | 自由记录投资心得与备忘 |
 | 🔐 | **Multi-user auth** | JWT 登录，数据按用户隔离，密钥与配置全走环境变量 |
 | 🕶️ | **Privacy & dark mode** | 一键打码所有金额（截图 / 公共场合）、深色主题 |
 | 💾 | **Backup & restore** | 整账 JSON 导出 / 导入，方便迁移与备份 |
@@ -139,16 +140,41 @@ Configuration via environment variables · 环境变量配置（见 [`backend/.e
 FinancialSystem/
 ├─ backend/                 FastAPI backend
 │  ├─ main.py               Entry: DB init, routers, static frontend hosting
-│  ├─ models.py             ★ Tables + schemas + market-value / P&L logic
-│  ├─ database.py           Engine, init_db, lightweight migrations
+│  ├─ models.py             Tables + schemas + market-value / P&L helpers
+│  ├─ database.py           Engine, init_db, auto-migration
+│  ├─ position.py           ★ Transaction replay → derived holding state
 │  ├─ price_provider.py     Quotes (akshare / CoinGecko)
 │  ├─ fx_provider.py        FX rates (open.er-api.com, BOC fallback)
-│  └─ routers/              platforms · holdings · fx · summary · …
+│  ├─ auth.py               JWT token creation / verification
+│  ├─ config.py             Settings from .env
+│  ├─ manage.py             CLI helpers (reset-password, list-users)
+│  └─ routers/
+│     ├─ auth.py            /api/auth   register · login · change-password
+│     ├─ platforms.py       /api/platforms   CRUD
+│     ├─ holdings.py        /api/holdings    CRUD + refresh-prices
+│     ├─ transactions.py    /api/transactions  CRUD, auto-sync derived holdings
+│     ├─ summary.py         /api/summary     total, P&L, daily snapshot
+│     ├─ fx.py              /api/fx          FX rate query / refresh
+│     ├─ snapshots.py       /api/snapshots   historical net-worth curve
+│     ├─ notes.py           /api/notes       investment journal CRUD
+│     └─ backup.py          /api/backup      export / import full account JSON
 ├─ frontend/                React + Vite SPA
-│  └─ src/                  pages/ · api/index.js (single API layer) · constants.js
+│  └─ src/
+│     ├─ App.jsx            Layout, routing, user menu
+│     ├─ constants.js       Enums, labels, privacy fmt helper
+│     ├─ holdings.js        Shared display helpers for derived / manual holdings
+│     ├─ api/index.js       Single API layer (all endpoints)
+│     └─ pages/
+│        ├─ Dashboard.jsx   Total, change, P&L trend chart, allocation pie
+│        ├─ Login.jsx       Login / register
+│        ├─ Platforms.jsx   Platform list + expandable holdings
+│        ├─ PlatformDetail.jsx  Holdings under one platform
+│        ├─ Transactions.jsx   Transaction ledger (drives derived holdings)
+│        └─ Notes.jsx       Investment journal
 ├─ Dockerfile              Multi-stage build (Node → Python)
 ├─ fly.toml                Fly.io config + persistent volume
-└─ dev.py                  Cross-platform dev launcher (start / stop / setup)
+├─ dev.py                  Cross-platform dev launcher (start / stop / setup)
+└─ start.bat / start.sh / stop.bat / stop.sh   Convenience scripts
 ```
 
 > 详细架构与数据流见 [ARCHITECTURE.md](ARCHITECTURE.md)，迭代记录见 [CHANGELOG.md](CHANGELOG.md)。
@@ -172,6 +198,10 @@ Quotes refresh **on demand** (manual "Update" button) — minimal API calls, ful
 
 - [x] Multi-user auth (JWT) · 多用户登录
 - [x] Cloud deployment (Docker + Fly.io) · 容器化上云
+- [x] Transaction-driven holdings (weighted-average cost, realized P&L) · 交易驱动持仓
+- [x] Investment journal · 投资心得备忘
+- [x] Privacy mode & dark theme · 隐私模式与深色主题
+- [x] Backup / restore · 备份与导入
 - [ ] Scheduled auto-refresh (APScheduler) · 定时自动刷新行情
 - [ ] PostgreSQL option for scale · 切换 PostgreSQL
 - [ ] Broker API sync (Futu / IBKR) · 券商 API 直连同步持仓

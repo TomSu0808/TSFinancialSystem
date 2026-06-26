@@ -12,6 +12,7 @@
 不用再手动配环境，也绝不会出现「Mac 的 venv 拿到 Win 上崩溃」的问题。
 """
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -39,13 +40,30 @@ def child_env() -> dict:
 ROOT = Path(__file__).resolve().parent
 BACKEND = ROOT / "backend"
 FRONTEND = ROOT / "frontend"
-VENV = BACKEND / ".venv"
 IS_WIN = os.name == "nt"
 BACKEND_PORT = 8000
 FRONTEND_PORT = 5173
 
-# 当前系统下 venv 里 python 的位置
-VENV_PY = VENV / ("Scripts/python.exe" if IS_WIN else "bin/python")
+
+def platform_tag() -> str:
+    system = platform.system().lower()
+    if system.startswith("windows"):
+        system = "win"
+    elif system == "darwin":
+        system = "mac"
+    return f"{system}-py{sys.version_info.major}{sys.version_info.minor}"
+
+
+LEGACY_VENV = BACKEND / ".venv"
+PREFERRED_VENV = BACKEND / f".venv-{platform_tag()}"
+VENV = PREFERRED_VENV
+
+
+def venv_python(venv: Path) -> Path:
+    return venv / ("Scripts/python.exe" if IS_WIN else "bin/python")
+
+
+VENV_PY = venv_python(VENV)
 
 
 def log(msg: str) -> None:
@@ -65,11 +83,12 @@ def npm_cmd() -> str:
 
 
 # ----------------------------- 自愈安装 -----------------------------
-def _check(code: str) -> bool:
+def _check(code: str, python_path: Path | None = None) -> bool:
     """在 venv 里跑一段 import 检测；捕获输出（不继承控制台，避免编码崩溃）。"""
+    python_path = python_path or VENV_PY
     try:
         return subprocess.run(
-            [str(VENV_PY), "-c", code],
+            [str(python_path), "-c", code],
             capture_output=True, env=child_env(),
         ).returncode == 0
     except OSError:
@@ -80,18 +99,38 @@ def venv_is_healthy() -> bool:
     return VENV_PY.exists() and _check("import sys")
 
 
+def legacy_venv_is_healthy() -> bool:
+    legacy_python = venv_python(LEGACY_VENV)
+    return legacy_python.exists() and _check("import sys", legacy_python)
+
+
+def select_venv() -> None:
+    """Use one backend venv per OS/Python, but keep a healthy legacy .venv usable."""
+    global VENV, VENV_PY
+    if PREFERRED_VENV.exists():
+        VENV = PREFERRED_VENV
+    elif LEGACY_VENV.exists() and legacy_venv_is_healthy():
+        VENV = LEGACY_VENV
+    else:
+        VENV = PREFERRED_VENV
+    VENV_PY = venv_python(VENV)
+
+
 def deps_installed() -> bool:
     return _check("import fastapi, uvicorn, sqlmodel, akshare")
 
 
 def ensure_backend() -> None:
-    # 1) venv：不存在 / 来自别的系统跑不起来 → 重建
+    select_venv()
+    log(f"使用后端虚拟环境 {VENV.relative_to(ROOT)}")
+
+    # 1) venv：不存在 / 当前系统跑不起来 → 重建当前系统专属环境
     if VENV.exists() and not venv_is_healthy():
-        log("检测到无效的 .venv（可能来自另一个系统），正在重建…")
+        log("检测到无效的虚拟环境，正在重建…")
         shutil.rmtree(VENV, ignore_errors=True)
     fresh = not VENV.exists()
     if fresh:
-        log("创建后端虚拟环境 backend/.venv …")
+        log(f"创建后端虚拟环境 {VENV.relative_to(ROOT)} …")
         if run([sys.executable, "-m", "venv", str(VENV)]) != 0:
             sys.exit("[X] 创建虚拟环境失败")
 
