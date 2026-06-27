@@ -247,16 +247,23 @@ export default function PlatformDetail() {
       >
         <Form form={form} layout="vertical">
           {!editing && (
-            <Segmented
-              block
-              value={mode}
-              onChange={setMode}
-              style={{ marginBottom: 16 }}
-              options={[
-                { label: '按交易记录（推荐）', value: 'derived' },
-                { label: '直接手填', value: 'manual' },
-              ]}
-            />
+            <>
+              <Segmented
+                block
+                value={mode}
+                onChange={setMode}
+                style={{ marginBottom: 8 }}
+                options={[
+                  { label: '通过交易自动计算（推荐）', value: 'derived' },
+                  { label: '手动维护市值', value: 'manual' },
+                ]}
+              />
+              <div style={{ marginBottom: 16, fontSize: 12, color: '#8c8c8c' }}>
+                {mode === 'derived'
+                  ? '适合股票、基金、ETF 等——先记买入交易，系统自动计算持仓数量和成本。'
+                  : '适合现金、债券、私募、无法自动抓价的资产——直接填入当前市值即可。'}
+              </div>
+            </>
           )}
           <Space style={{ display: 'flex' }}>
             <Form.Item name="currency" label="币种" rules={[{ required: true }]} style={{ flex: 1 }}>

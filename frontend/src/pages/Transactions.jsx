@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import {
   Button, Card, DatePicker, Form, Input, InputNumber, Modal, Popconfirm,
   Select, Space, Table, Tag, message,
@@ -28,6 +29,7 @@ const txnAmount = (t) => {
 }
 
 export default function Transactions() {
+  const location = useLocation()
   const [data, setData] = useState([])
   const [platforms, setPlatforms] = useState([])
   const [loading, setLoading] = useState(false)
@@ -56,6 +58,14 @@ export default function Transactions() {
   useEffect(() => {
     load()
   }, [])
+
+  // 从仪表盘"记一笔"快捷入口跳转过来时，自动打开弹窗
+  useEffect(() => {
+    if (location.state?.openAdd) {
+      openAdd()
+      window.history.replaceState({}, '')
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const openAdd = () => {
     setEditing(null)

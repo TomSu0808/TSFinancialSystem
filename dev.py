@@ -84,7 +84,7 @@ def npm_cmd() -> str:
 
 
 # ----------------------------- 自愈安装 -----------------------------
-def _check(code: str, python_path: Path | None = None) -> bool:
+def _check(code: str, python_path=None) -> bool:
     """在 venv 里跑一段 import 检测；捕获输出（不继承控制台，避免编码崩溃）。"""
     python_path = python_path or VENV_PY
     try:

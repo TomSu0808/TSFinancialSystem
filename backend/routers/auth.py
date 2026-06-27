@@ -2,6 +2,8 @@
 
 首个注册成功的用户会自动认领历史无主数据（user_id 为空的平台/资产/心得）。
 """
+from __future__ import annotations
+
 import logging
 import re
 from datetime import datetime, timedelta

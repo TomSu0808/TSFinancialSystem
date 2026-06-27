@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState, useContext } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
-  Button, Card, Col, Empty, Row, Segmented, Space, Tag, Tooltip, message,
+  Button, Card, Col, Empty, Row, Segmented, Space, Steps, Tag, Tooltip, message,
 } from 'antd'
-import { ReloadOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons'
+import {
+  ReloadOutlined, ArrowUpOutlined, ArrowDownOutlined,
+  EditOutlined, InfoCircleOutlined, ExclamationCircleOutlined,
+  CheckCircleOutlined, RightOutlined,
+} from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import { getSummary, getSnapshots, refreshPrices, refreshRate } from '../api'
 import { CURRENCY_SYMBOL, CURRENCY_LABEL, ASSET_TYPE_LABEL, fmt, isMasked } from '../constants'
@@ -23,6 +27,7 @@ function MetricCard({ label, value, sub, tone }) {
 
 export default function Dashboard({ autoRefresh = false }) {
   const { upColor: RED, downColor: GREEN } = useColorScheme()
+  const navigate = useNavigate()
   const [currency, setCurrency] = useState('CNY')
   const [summary, setSummary] = useState(null)
   const [snapshots, setSnapshots] = useState([])
@@ -92,6 +97,31 @@ export default function Dashboard({ autoRefresh = false }) {
   const cashTotal = byType('cash')?.display_total ?? 0
   const stockTotal = (byType('stock')?.display_total ?? 0) + (byType('etf')?.display_total ?? 0)
   const largestPlatform = summary?.by_platform?.[0]
+
+  const isNewUser = !loading && summary !== null && total === 0
+
+  const insights = []
+  if (summary && total > 0) {
+    if (largestPlatform) {
+      const lpPct = largestPlatform.display_total / total * 100
+      insights.push({
+        warning: lpPct >= 50,
+        text: `最大平台「${largestPlatform.platform}」占总资产 ${lpPct.toFixed(0)}%${lpPct >= 50 ? '，集中度偏高，建议分散配置' : ''}`,
+      })
+    }
+    const cashPct = total ? cashTotal / total * 100 : 0
+    insights.push({ warning: false, text: `现金类资产占比 ${cashPct.toFixed(0)}%` })
+    const stockPct = total ? stockTotal / total * 100 : 0
+    if (stockPct > 0) {
+      insights.push({ warning: false, text: `股票 / ETF 占比 ${stockPct.toFixed(0)}%` })
+    }
+    if ((summary.total_cost ?? 0) === 0) {
+      insights.push({ warning: true, text: '尚未录入成本信息，收益率数据暂无法统计' })
+    }
+    if (!summary.rate) {
+      insights.push({ warning: true, text: '汇率未刷新，多币种换算可能不准确，建议点击更新' })
+    }
+  }
 
   const pie = (data, nameKey, mapName) => ({
     tooltip: {
@@ -173,14 +203,75 @@ export default function Dashboard({ autoRefresh = false }) {
                 onChange={setCurrency}
                 options={[{ label: '¥ 人民币', value: 'CNY' }, { label: '$ 美元', value: 'USD' }]}
               />
-              <Button type="primary" icon={<ReloadOutlined />} loading={refreshing} onClick={doRefresh}>
-                更新行情与汇率
-              </Button>
+              <Space size={8} wrap style={{ justifyContent: 'flex-end' }}>
+                <Button
+                  icon={<EditOutlined />}
+                  onClick={() => navigate('/transactions', { state: { openAdd: true } })}
+                >
+                  记一笔
+                </Button>
+                <Button type="primary" icon={<ReloadOutlined />} loading={refreshing} onClick={doRefresh}>
+                  更新行情与汇率
+                </Button>
+              </Space>
               <Tag>USD/CNY {summary?.rate ?? '未刷新'}</Tag>
             </Space>
           </Col>
         </Row>
       </Card>
+
+      {isNewUser && (
+        <Card title="开始使用" style={{ borderColor: '#1677ff22' }}>
+          <div style={{ marginBottom: 16, color: '#595959', fontSize: 14 }}>
+            欢迎！按以下步骤开始记录你的资产状况：
+          </div>
+          <Steps
+            direction="vertical"
+            size="small"
+            current={0}
+            style={{ maxWidth: 520 }}
+            items={[
+              {
+                title: '创建第一个账户',
+                description: (
+                  <span>
+                    在「资产账户」页添加一个券商、银行或钱包账户。
+                    {' '}
+                    <Link to="/platforms" style={{ fontWeight: 500 }}>
+                      去添加 <RightOutlined style={{ fontSize: 11 }} />
+                    </Link>
+                  </span>
+                ),
+                status: 'process',
+              },
+              {
+                title: '记录第一笔交易或添加持仓',
+                description: (
+                  <span>
+                    有了账户后，记录一笔买入来建立你的第一个持仓；也可以直接手填现有资产。
+                    {' '}
+                    <a
+                      style={{ fontWeight: 500 }}
+                      onClick={() => navigate('/transactions', { state: { openAdd: true } })}
+                    >
+                      记一笔 <RightOutlined style={{ fontSize: 11 }} />
+                    </a>
+                  </span>
+                ),
+                status: 'wait',
+              },
+              {
+                title: '回到这里查看总览',
+                description: '记录后，这里会显示你的资产分布、收益走势和今日涨跌。',
+                status: 'wait',
+              },
+            ]}
+          />
+          <div style={{ marginTop: 16, color: '#8c8c8c', fontSize: 12 }}>
+            还可以在「个人资料」中设置 AI Key、导出备份，保护你的数据安全。
+          </div>
+        </Card>
+      )}
 
       <Row gutter={[16, 16]}>
         <Col xs={12} md={6}>
@@ -205,6 +296,24 @@ export default function Dashboard({ autoRefresh = false }) {
           />
         </Col>
       </Row>
+
+      {insights.length > 0 && (
+        <Card
+          size="small"
+          title={<Space size={6}><InfoCircleOutlined style={{ color: '#1677ff' }} />值得关注</Space>}
+        >
+          <Space direction="vertical" style={{ display: 'flex' }} size={8}>
+            {insights.map((item, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13 }}>
+                {item.warning
+                  ? <ExclamationCircleOutlined style={{ color: '#faad14', marginTop: 2, flexShrink: 0 }} />
+                  : <CheckCircleOutlined style={{ color: '#52c41a', marginTop: 2, flexShrink: 0 }} />}
+                <span style={{ color: item.warning ? '#595959' : '#595959' }}>{item.text}</span>
+              </div>
+            ))}
+          </Space>
+        </Card>
+      )}
 
       <Card loading={loading} title="总资产走势">
         {snapshots.length > 1 ? (
