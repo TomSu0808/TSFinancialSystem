@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useContext } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Button, Card, Col, Empty, Row, Segmented, Space, Steps, Tag, Tooltip, message,
@@ -12,6 +12,7 @@ import ReactECharts from 'echarts-for-react'
 import { getSummary, getSnapshots, refreshPrices, refreshRate } from '../api'
 import { CURRENCY_SYMBOL, CURRENCY_LABEL, ASSET_TYPE_LABEL, fmt, isMasked } from '../constants'
 import { useColorScheme } from '../colorScheme.jsx'
+import { useDisplaySettings } from '../displaySettings.jsx'
 
 function MetricCard({ label, value, sub, tone }) {
   return (
@@ -27,17 +28,17 @@ function MetricCard({ label, value, sub, tone }) {
 
 export default function Dashboard({ autoRefresh = false }) {
   const { upColor: RED, downColor: GREEN } = useColorScheme()
+  const { displayCurrency, setDisplayCurrency } = useDisplaySettings()
   const navigate = useNavigate()
-  const [currency, setCurrency] = useState('CNY')
   const [summary, setSummary] = useState(null)
   const [snapshots, setSnapshots] = useState([])
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
 
-  const load = useCallback(async (cur) => {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [s, snaps] = await Promise.all([getSummary(cur), getSnapshots(180)])
+      const [s, snaps] = await Promise.all([getSummary(displayCurrency), getSnapshots(180)])
       setSummary(s)
       setSnapshots(snaps)
     } catch (e) {
@@ -45,11 +46,11 @@ export default function Dashboard({ autoRefresh = false }) {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [displayCurrency])
 
   useEffect(() => {
-    load(currency)
-  }, [currency, load])
+    load()
+  }, [load])
 
   const doRefresh = async () => {
     setRefreshing(true)
@@ -63,7 +64,7 @@ export default function Dashboard({ autoRefresh = false }) {
       if (fx.status === 'rejected') {
         message.warning('汇率刷新失败，暂用最近一次缓存')
       }
-      await load(currency)
+      await load()
     } finally {
       setRefreshing(false)
     }
@@ -78,7 +79,7 @@ export default function Dashboard({ autoRefresh = false }) {
   }, [autoRefresh]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const masked = isMasked()
-  const sym = CURRENCY_SYMBOL[currency]
+  const sym = CURRENCY_SYMBOL[displayCurrency]
   const change = summary?.change ?? 0
   const up = change >= 0
   const changeColor = up ? RED : GREEN
@@ -157,7 +158,7 @@ export default function Dashboard({ autoRefresh = false }) {
       showSymbol: snapshots.length < 30,
       areaStyle: { opacity: 0.12 },
       lineStyle: { width: 2 },
-      data: snapshots.map((s) => (currency === 'CNY' ? s.total_cny : s.total_usd)),
+      data: snapshots.map((s) => (displayCurrency === 'CNY' ? s.total_cny : s.total_usd)),
     }],
   }
 
@@ -166,7 +167,7 @@ export default function Dashboard({ autoRefresh = false }) {
       <Card loading={loading} bodyStyle={{ padding: 24 }}>
         <Row gutter={[24, 24]} align="middle">
           <Col xs={24} md={15}>
-            <div style={{ color: '#8c8c8c', marginBottom: 8 }}>总资产（{CURRENCY_LABEL[currency]}）</div>
+            <div style={{ color: '#8c8c8c', marginBottom: 8 }}>总资产（{CURRENCY_LABEL[displayCurrency]}）</div>
             <div style={{ fontSize: 44, fontWeight: 800, lineHeight: 1.05 }}>
               {sym}{fmt(total)}
             </div>
@@ -199,8 +200,8 @@ export default function Dashboard({ autoRefresh = false }) {
           <Col xs={24} md={9} style={{ textAlign: 'right' }}>
             <Space direction="vertical" align="end" size={12}>
               <Segmented
-                value={currency}
-                onChange={setCurrency}
+                value={displayCurrency}
+                onChange={setDisplayCurrency}
                 options={[{ label: '¥ 人民币', value: 'CNY' }, { label: '$ 美元', value: 'USD' }]}
               />
               <Space size={8} wrap style={{ justifyContent: 'flex-end' }}>

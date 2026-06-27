@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useColorScheme } from '../colorScheme.jsx'
+import { useDisplaySettings, convertAmount } from '../displaySettings.jsx'
 import { Link } from 'react-router-dom'
 import {
   Button, Card, Col, Empty, Form, Input, Modal, Popconfirm, Progress, Row, Segmented, Space, Table, Tag, message,
@@ -13,10 +14,10 @@ import { marketValue, costBasis, profitOf, isDerived } from '../holdings'
 
 export default function Platforms() {
   const { upColor, downColor } = useColorScheme()
+  const { displayCurrency, setDisplayCurrency } = useDisplaySettings()
   const [data, setData] = useState([])
   const [holdings, setHoldings] = useState([])
   const [fx, setFx] = useState(null)
-  const [currency, setCurrency] = useState('CNY')
   const [loading, setLoading] = useState(false)
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(null)
@@ -40,11 +41,9 @@ export default function Platforms() {
     load()
   }, [])
 
-  const sym = CURRENCY_SYMBOL[currency]
+  const sym = CURRENCY_SYMBOL[displayCurrency]
   const rate = fx?.updated_at ? fx.rate : null
-  const toCny = (mv, cur) => mv * (cur === 'USD' ? rate : cur === 'HKD' ? rate / 7.8 : 1)
-  const toDisplay = (cny) => (currency === 'CNY' ? cny : rate ? cny / rate : 0)
-  const displayValue = (h) => toDisplay(toCny(marketValue(h), h.currency))
+  const displayValue = (h) => convertAmount(marketValue(h), h.currency, displayCurrency, rate) ?? 0
 
   const byPlatform = useMemo(() => {
     const map = {}
@@ -155,9 +154,12 @@ export default function Platforms() {
           const cb = costBasis(r)
           const pct = cb ? (p / cb) * 100 : 0
           const up = p >= 0
+          const displayP = convertAmount(p, r.currency, displayCurrency, rate)
+          const dispSym = displayP != null ? CURRENCY_SYMBOL[displayCurrency] : CURRENCY_SYMBOL[r.currency]
+          const dispVal = displayP != null ? displayP : p
           return (
             <span style={{ color: up ? upColor : downColor }}>
-              {up ? '+' : ''}{CURRENCY_SYMBOL[r.currency] || ''}{fmt(p)}
+              {up ? '+' : ''}{dispSym || ''}{fmt(dispVal)}
               <span style={{ fontSize: 12, marginLeft: 4 }}>({up ? '+' : ''}{pct.toFixed(1)}%)</span>
             </span>
           )
@@ -237,8 +239,8 @@ export default function Platforms() {
           <Col xs={24} md={10} style={{ textAlign: 'right' }}>
             <Space wrap style={{ justifyContent: 'flex-end' }}>
               <Segmented
-                value={currency}
-                onChange={setCurrency}
+                value={displayCurrency}
+                onChange={setDisplayCurrency}
                 options={[
                   { label: '¥ 人民币', value: 'CNY' },
                   { label: '$ 美元', value: 'USD' },

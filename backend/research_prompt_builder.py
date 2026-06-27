@@ -40,6 +40,71 @@ def _lang_block(lang: str) -> str:
     )
 
 
+def _priority_language_block(lang: str) -> str:
+    if lang == "en":
+        return (
+            "# Highest Priority Instruction\n\n"
+            "The final answer MUST be a complete English Markdown report.\n"
+            "If any skill definition, source material, or platform context below uses another language, "
+            "treat it as input only and write the final report in English. "
+            "Preserve company names, ticker symbols, financial metric abbreviations, exact quotations, "
+            "and URLs when needed."
+        )
+    return (
+        "# 最高优先级指令\n\n"
+        "最终答案必须是一份完整的简体中文 Markdown 报告。无论下方 skill、模板、来源材料或平台上下文使用什么语言，"
+        "都只能作为输入信息参考，最终报告正文必须使用简体中文。\n\n"
+        "标题、小节、摘要、表格字段、投资结论、风险提示、来源说明都必须使用简体中文。"
+        "仅公司名、股票代码、财务指标缩写、英文原文引用和 URL 可以保留英文。"
+        "不得输出英文报告；如果你准备使用英文，请先翻译成简体中文再输出。"
+    )
+
+
+def _format_requirements(lang: str) -> str:
+    if lang == "en":
+        return (
+            "## Output Format Requirements\n\n"
+            "- Output standard Markdown only — NO HTML tags.\n"
+            "- Use clear heading hierarchy: `#` for the report title, `##` for major sections, "
+            "`###` for sub-sections.\n"
+            "- Use GFM Markdown tables (pipe syntax) for all data comparisons, financials, "
+            "and metric summaries — do NOT use plain text columns or ASCII art.\n"
+            "- Do NOT wrap the entire report in a fenced code block (``` ... ```).\n"
+            "- Place all cited source URLs under a `## Sources` section at the end of the report; "
+            "use markdown link syntax `[title](url)`.\n"
+            "- Use `**bold**` for key metrics and `> blockquote` for important caveats."
+        )
+    return (
+        "## 输出格式要求\n\n"
+        "- 只输出标准 Markdown，不要输出 HTML 标签。\n"
+        "- 使用清晰的标题层级：`#` 用于报告标题，`##` 用于主要章节，`###` 用于子章节。\n"
+        "- 所有数据对比、财务数据、指标摘要必须使用 GFM Markdown 表格（竖线表格语法），"
+        "不要使用纯文本对齐列或 ASCII 图。\n"
+        "- 不要把整份报告包在代码块中（``` ... ```）。\n"
+        "- 所有引用来源链接统一放在报告末尾的 `## 来源与核验` 小节，使用 Markdown 链接格式 `[标题](URL)`。\n"
+        "- 使用 `**加粗**` 标出关键指标，使用 `> 引用块` 标出重要假设、限制或风险提示。\n"
+        "- 表格列名、图表说明、章节标题必须使用简体中文。"
+    )
+
+
+def _source_requirements(lang: str) -> str:
+    if lang == "en":
+        return (
+            "## Source Requirements\n\n"
+            "- Every factual claim must cite its source (annual report, SEC/exchange filing, "
+            "earnings call, industry report, news).\n"
+            "- If a source cannot be verified, state this explicitly — do not fabricate data.\n"
+            "- Distinguish between audited facts, management estimates, and analyst consensus."
+        )
+    return (
+        "## 来源要求\n\n"
+        "- 每一个关键事实判断都必须注明来源，例如年报、SEC/交易所公告、财报电话会、行业报告或新闻。\n"
+        "- 如果来源无法核验，必须明确说明“未能核验”，不要编造数据。\n"
+        "- 区分经审计事实、管理层预期和分析师一致预期。\n"
+        "- 来源说明本身也必须使用简体中文，来源标题或机构名称可保留原文。"
+    )
+
+
 def _disclaimer(lang: str) -> str:
     return _DISCLAIMER_EN if lang == "en" else _DISCLAIMER_ZH
 
@@ -82,9 +147,17 @@ def build_prompt(
     else:
         context_body = "\n*(No holding data available — proceeding with public information only.)*\n"
 
-    extra_block = f"\n\n## Additional Instructions\n\n{extra_instruction}" if extra_instruction else ""
+    extra_title = "## Additional Instructions" if report_language == "en" else "## 额外要求"
+    extra_block = f"\n\n{extra_title}\n\n{extra_instruction}" if extra_instruction else ""
+    final_language_guard = (
+        "\n\nFinal answer language reminder: write the final report in English."
+        if report_language == "en"
+        else "\n\n最终语言提醒：最终报告必须使用简体中文输出，不要输出英文报告。"
+    )
 
     return (
+        f"{_priority_language_block(report_language)}\n\n"
+        "---\n\n"
         "# AI Berkshire Skill\n\n"
         "以下是来自 xbtlin/ai-berkshire 的原始 skill 定义，请严格遵守其研究框架和输出纪律。\n"
         "*(The following is the original skill definition from xbtlin/ai-berkshire.)*\n\n"
@@ -99,13 +172,11 @@ def build_prompt(
         "你现在不是在 Claude Code slash command 中执行，而是在 Web 投研系统中执行。\n"
         "请严格遵守上方 AI Berkshire skill 的研究框架和输出纪律。\n\n"
         f"{_lang_block(report_language)}\n\n"
-        "## Source Requirements\n\n"
-        "- Every factual claim must cite its source (annual report, SEC/exchange filing, "
-        "earnings call, industry report, news).\n"
-        "- If a source cannot be verified, state this explicitly — do not fabricate data.\n"
-        "- Distinguish between audited facts, management estimates, and analyst consensus.\n"
+        f"{_format_requirements(report_language)}\n\n"
+        f"{_source_requirements(report_language)}"
         f"{extra_block}"
         f"{_disclaimer(report_language)}\n\n"
+        f"{final_language_guard}\n\n"
         "---\n"
         "*Research framework adapted from [xbtlin/ai-berkshire](https://github.com/xbtlin/ai-berkshire), "
         "MIT License.*"

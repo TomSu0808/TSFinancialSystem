@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Alert, Button, Descriptions, Divider, Drawer, Layout, Menu, Dropdown, Avatar, Space,
+  Alert, Button, Descriptions, Divider, Drawer, Grid, Layout, Menu, Dropdown, Avatar, Space,
   Modal, Select, Tag, Typography, message, ConfigProvider, theme, Form, Input, Popconfirm,
 } from 'antd'
 import {
@@ -8,6 +8,7 @@ import {
   UserOutlined, LogoutOutlined, DownloadOutlined, UploadOutlined,
   EyeOutlined, EyeInvisibleOutlined, BulbOutlined, SyncOutlined,
   FundOutlined, MailOutlined, QuestionCircleOutlined, KeyOutlined, DeleteOutlined,
+  MenuOutlined,
 } from '@ant-design/icons'
 import { Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import Dashboard from './pages/Dashboard.jsx'
@@ -24,6 +25,7 @@ import {
 } from './api'
 import { setMask } from './constants'
 import { ColorSchemeContext } from './colorScheme.jsx'
+import { DisplaySettingsContext } from './displaySettings.jsx'
 
 const { Header, Content } = Layout
 const { Title, Text } = Typography
@@ -55,12 +57,23 @@ const SECURITY_QUESTIONS = [
 export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
+  const screens = Grid.useBreakpoint()
+  const isMobile = !screens.md
   const [user, setUser] = useState(() => (getToken() ? getStoredUser() : null))
   const [dark, setDark] = useState(() => lsBool('dark'))
   const [colorScheme, setColorScheme] = useState(() => localStorage.getItem('colorScheme') || 'cn')
   const [privacy, setPrivacy] = useState(() => lsBool('privacy'))
   const [autoRefresh, setAutoRefresh] = useState(() => lsBool('autoRefresh'))
+  const [displayCurrency, setDisplayCurrencyState] = useState(
+    () => localStorage.getItem('displayCurrency') || 'USD'
+  )
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
+
+  const setDisplayCurrency = (cur) => {
+    setDisplayCurrencyState(cur)
+    localStorage.setItem('displayCurrency', cur)
+  }
   const [pwdForm] = Form.useForm()
   const [pwdLoading, setPwdLoading] = useState(false)
   const [emailForm] = Form.useForm()
@@ -376,7 +389,8 @@ export default function App() {
       },
       {
         key: 'colorScheme',
-        label: colorScheme === 'cn' ? '红涨绿跌（切换为绿涨红跌）' : '绿涨红跌（切换为红涨绿跌）',
+        icon: <FundOutlined />,
+        label: `涨跌颜色：${colorScheme === 'cn' ? '红涨绿跌' : '绿涨红跌'}`,
         onClick: () => setColorScheme((v) => (v === 'cn' ? 'us' : 'cn')),
       },
       {
@@ -407,18 +421,46 @@ export default function App() {
       <Layout style={{ minHeight: '100vh' }}>
         <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={onPickFile} />
 
-        <Header style={{ display: 'flex', alignItems: 'center', paddingInline: 16 }}>
-          <div style={{ color: '#fff', fontWeight: 700, fontSize: 18, marginRight: 28, whiteSpace: 'nowrap' }}>
+        <Header style={{ display: 'flex', alignItems: 'center', paddingInline: 16, gap: 8 }}>
+          {isMobile && (
+            <Button
+              type="text"
+              icon={<MenuOutlined />}
+              style={{ color: '#fff', flexShrink: 0 }}
+              onClick={() => setMobileNavOpen(true)}
+            />
+          )}
+          <div style={{ color: '#fff', fontWeight: 700, fontSize: isMobile ? 15 : 18, marginRight: isMobile ? 0 : 28, whiteSpace: 'nowrap', flex: isMobile ? 1 : 'none' }}>
             TS FinancialSystem
           </div>
-          <Menu theme="dark" mode="horizontal" selectedKeys={[selected]} items={navItems} style={{ flex: 1, minWidth: 0 }} />
+          {!isMobile && (
+            <Menu theme="dark" mode="horizontal" selectedKeys={[selected]} items={navItems} style={{ flex: 1, minWidth: 0 }} />
+          )}
           <Dropdown menu={userMenu}>
-            <Space style={{ color: '#fff', cursor: 'pointer' }}>
+            <Space style={{ color: '#fff', cursor: 'pointer', flexShrink: 0 }}>
               <Avatar size="small" icon={<UserOutlined />} />
-              {user.username}
+              {!isMobile && user.username}
             </Space>
           </Dropdown>
         </Header>
+
+        {/* Mobile navigation drawer */}
+        <Drawer
+          open={mobileNavOpen}
+          onClose={() => setMobileNavOpen(false)}
+          placement="left"
+          title="导航"
+          width={220}
+          styles={{ body: { padding: 0 } }}
+        >
+          <Menu
+            mode="inline"
+            selectedKeys={[selected]}
+            items={navItems}
+            onClick={() => setMobileNavOpen(false)}
+            style={{ borderRight: 0 }}
+          />
+        </Drawer>
 
         <Content key={privacy ? 'priv' : 'pub'} style={{ padding: '20px 16px', maxWidth: 1280, width: '100%', margin: '0 auto' }}>
           {/* 只在有邮箱且未验证时显示提醒 */}
@@ -442,16 +484,18 @@ export default function App() {
               }
             />
           )}
-          <ColorSchemeContext.Provider value={colorScheme}>
-            <Routes>
-              <Route path="/" element={<Dashboard autoRefresh={autoRefresh} />} />
-              <Route path="/platforms" element={<Platforms />} />
-              <Route path="/platforms/:id" element={<PlatformDetail />} />
-              <Route path="/transactions" element={<Transactions />} />
-              <Route path="/notes" element={<Notes />} />
-              <Route path="/research" element={<Research />} />
-            </Routes>
-          </ColorSchemeContext.Provider>
+          <DisplaySettingsContext.Provider value={{ displayCurrency, setDisplayCurrency }}>
+            <ColorSchemeContext.Provider value={colorScheme}>
+              <Routes>
+                <Route path="/" element={<Dashboard autoRefresh={autoRefresh} />} />
+                <Route path="/platforms" element={<Platforms />} />
+                <Route path="/platforms/:id" element={<PlatformDetail />} />
+                <Route path="/transactions" element={<Transactions />} />
+                <Route path="/notes" element={<Notes />} />
+                <Route path="/research" element={<Research />} />
+              </Routes>
+            </ColorSchemeContext.Provider>
+          </DisplaySettingsContext.Provider>
         </Content>
       </Layout>
 

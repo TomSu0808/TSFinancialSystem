@@ -1,25 +1,30 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import {
-  Button, Card, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Space, Switch, Table, Tag, Tooltip, message,
+  Button, Card, Col, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Row,
+  Segmented, Select, Space, Switch, Table, Tag, Tooltip, message,
 } from 'antd'
 import { PlusOutlined, ReloadOutlined, ArrowLeftOutlined, LinkOutlined, WarningOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
-  listPlatforms, listHoldings, createHolding, updateHolding, deleteHolding, refreshPrices, createTransaction,
+  listPlatforms, listHoldings, createHolding, updateHolding, deleteHolding, refreshPrices,
+  createTransaction, getRate,
 } from '../api'
 import {
   CURRENCIES, ASSET_TYPES, MARKETS, MARKET_LABEL, ASSET_TYPE_LABEL, CURRENCY_SYMBOL, fmt,
 } from '../constants'
 import { marketValue, dayChange, costBasis, profitOf, isDerived, isClosed, isAnomalous } from '../holdings'
 import { useColorScheme } from '../colorScheme.jsx'
+import { useDisplaySettings, convertAmount } from '../displaySettings.jsx'
 
 export default function PlatformDetail() {
   const { upColor, downColor } = useColorScheme()
+  const { displayCurrency } = useDisplaySettings()
   const { id } = useParams()
   const platformId = Number(id)
   const [platform, setPlatform] = useState(null)
   const [data, setData] = useState([])
+  const [fx, setFx] = useState(null)
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [showClosed, setShowClosed] = useState(false)
@@ -28,15 +33,25 @@ export default function PlatformDetail() {
   const [mode, setMode] = useState('derived')
   const [form] = Form.useForm()
 
+  const rate = fx?.updated_at ? fx.rate : null
+  const conv = (amount, srcCur) => {
+    const result = convertAmount(amount, srcCur, displayCurrency, rate)
+    return result != null
+      ? { value: result, sym: CURRENCY_SYMBOL[displayCurrency] || '' }
+      : { value: amount, sym: CURRENCY_SYMBOL[srcCur] || '' }
+  }
+
   const load = async () => {
     setLoading(true)
     try {
-      const [plats, holdings] = await Promise.all([
+      const [plats, holdings, fxRate] = await Promise.all([
         listPlatforms(),
         listHoldings({ platform_id: platformId, include_closed: showClosed }),
+        getRate(),
       ])
       setPlatform(plats.find((p) => p.id === platformId) || null)
       setData(holdings)
+      setFx(fxRate)
     } catch (e) {
       message.error('加载失败：' + e.message)
     } finally {
@@ -146,7 +161,10 @@ export default function PlatformDetail() {
     },
     {
       title: '市值', align: 'right',
-      render: (_, r) => `${CURRENCY_SYMBOL[r.currency] || ''}${fmt(marketValue(r))}`,
+      render: (_, r) => {
+        const { value, sym } = conv(marketValue(r), r.currency)
+        return `${sym}${fmt(value)}`
+      },
       sorter: (a, b) => marketValue(a) - marketValue(b),
     },
     {
@@ -155,14 +173,17 @@ export default function PlatformDetail() {
         const c = dayChange(r)
         if (!c) return '—'
         const up = c >= 0
-        return <span style={{ color: up ? upColor : downColor }}>{up ? '+' : ''}{fmt(c)}</span>
+        const { value, sym } = conv(c, r.currency)
+        return <span style={{ color: up ? upColor : downColor }}>{up ? '+' : ''}{sym}{fmt(value)}</span>
       },
     },
     {
       title: '成本', align: 'right',
       render: (_, r) => {
         const cb = costBasis(r)
-        return cb == null ? '—' : `${CURRENCY_SYMBOL[r.currency] || ''}${fmt(cb)}`
+        if (cb == null) return '—'
+        const { value, sym } = conv(cb, r.currency)
+        return `${sym}${fmt(value)}`
       },
     },
     {
@@ -174,9 +195,10 @@ export default function PlatformDetail() {
         const cb = costBasis(r)
         const pct = cb ? (p / cb) * 100 : 0
         const up = p >= 0
+        const { value, sym } = conv(p, r.currency)
         return (
           <span style={{ color: up ? upColor : downColor }}>
-            {up ? '+' : ''}{CURRENCY_SYMBOL[r.currency] || ''}{fmt(p)}
+            {up ? '+' : ''}{sym}{fmt(value)}
             <span style={{ fontSize: 12, marginLeft: 4 }}>({up ? '+' : ''}{pct.toFixed(1)}%)</span>
           </span>
         )
@@ -188,10 +210,13 @@ export default function PlatformDetail() {
         const realized = (r.realized_pnl || 0) + (r.realized_income || 0)
         if (!isDerived(r) || realized === 0) return '—'
         const up = realized >= 0
+        const { value, sym } = conv(realized, r.currency)
+        const { value: pnlVal } = conv(r.realized_pnl || 0, r.currency)
+        const { value: incVal } = conv(r.realized_income || 0, r.currency)
         return (
-          <Tooltip title={`已实现盈亏 ${fmt(r.realized_pnl || 0)} + 分红 ${fmt(r.realized_income || 0)}`}>
+          <Tooltip title={`已实现盈亏 ${fmt(pnlVal)} + 分红 ${fmt(incVal)}`}>
             <span style={{ color: up ? upColor : downColor }}>
-              {up ? '+' : ''}{CURRENCY_SYMBOL[r.currency] || ''}{fmt(realized)}
+              {up ? '+' : ''}{sym}{fmt(value)}
             </span>
           </Tooltip>
         )
@@ -214,7 +239,7 @@ export default function PlatformDetail() {
         </Space>
       ),
     },
-  ], [])
+  ], [upColor, downColor, displayCurrency, rate]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <Card
@@ -225,7 +250,7 @@ export default function PlatformDetail() {
         </Space>
       }
       extra={
-        <Space>
+        <Space wrap size={[8, 6]}>
           <Space size={4}>
             <span style={{ color: '#888', fontSize: 13 }}>显示已清仓</span>
             <Switch size="small" checked={showClosed} onChange={setShowClosed} />
@@ -265,17 +290,23 @@ export default function PlatformDetail() {
               </div>
             </>
           )}
-          <Space style={{ display: 'flex' }}>
-            <Form.Item name="currency" label="币种" rules={[{ required: true }]} style={{ flex: 1 }}>
-              <Select options={CURRENCIES} />
-            </Form.Item>
-            <Form.Item name="asset_type" label="类型" rules={[{ required: true }]} style={{ flex: 1 }}>
-              <Select options={ASSET_TYPES} />
-            </Form.Item>
-            <Form.Item name="market" label="市场（决定行情源）" rules={[{ required: true }]} style={{ flex: 1.4 }}>
-              <Select options={MARKETS} />
-            </Form.Item>
-          </Space>
+          <Row gutter={8}>
+            <Col xs={24} md={8}>
+              <Form.Item name="currency" label="币种" rules={[{ required: true }]}>
+                <Select options={CURRENCIES} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item name="asset_type" label="类型" rules={[{ required: true }]}>
+                <Select options={ASSET_TYPES} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item name="market" label="市场（决定行情源）" rules={[{ required: true }]}>
+                <Select options={MARKETS} />
+              </Form.Item>
+            </Col>
+          </Row>
           <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
             <Input placeholder="如：Apple、贵州茅台、腾讯控股" />
           </Form.Item>
@@ -283,32 +314,46 @@ export default function PlatformDetail() {
             <Input placeholder="行情代码" />
           </Form.Item>
           {(mode === 'derived' && !editing) ? (
-            <Space style={{ display: 'flex' }}>
-              <Form.Item name="date" label="买入日期" rules={[{ required: true }]} style={{ flex: 1 }}>
-                <DatePicker style={{ width: '100%' }} />
-              </Form.Item>
-              <Form.Item name="quantity" label="买入数量" rules={[{ required: true }]} style={{ flex: 1 }}>
-                <InputNumber style={{ width: '100%' }} placeholder="股数/份额" />
-              </Form.Item>
-              <Form.Item name="price" label="买入价" rules={[{ required: true }]} style={{ flex: 1 }}>
-                <InputNumber style={{ width: '100%' }} placeholder="成交价" />
-              </Form.Item>
-              <Form.Item name="fee" label="费用" style={{ flex: 1 }}>
-                <InputNumber style={{ width: '100%' }} placeholder="手续费" />
-              </Form.Item>
-            </Space>
+            <Row gutter={8}>
+              <Col xs={24} md={6}>
+                <Form.Item name="date" label="买入日期" rules={[{ required: true }]}>
+                  <DatePicker style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={6}>
+                <Form.Item name="quantity" label="买入数量" rules={[{ required: true }]}>
+                  <InputNumber style={{ width: '100%' }} placeholder="股数/份额" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={6}>
+                <Form.Item name="price" label="买入价" rules={[{ required: true }]}>
+                  <InputNumber style={{ width: '100%' }} placeholder="成交价" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={6}>
+                <Form.Item name="fee" label="费用">
+                  <InputNumber style={{ width: '100%' }} placeholder="手续费" />
+                </Form.Item>
+              </Col>
+            </Row>
           ) : (
-            <Space style={{ display: 'flex' }}>
-              <Form.Item name="quantity" label="持有数量/份额" style={{ flex: 1 }}>
-                <InputNumber style={{ width: '100%' }} placeholder="股数/份额" disabled={editing?.source === 'derived'} />
-              </Form.Item>
-              <Form.Item name="cost_price" label="成本价（可选）" style={{ flex: 1 }}>
-                <InputNumber style={{ width: '100%' }} placeholder="用于盈亏" disabled={editing?.source === 'derived'} />
-              </Form.Item>
-              <Form.Item name="manual_value" label="手填市值（无法抓价时）" style={{ flex: 1.2 }}>
-                <InputNumber style={{ width: '100%' }} placeholder="现金/债券等直接填金额" disabled={editing?.source === 'derived'} />
-              </Form.Item>
-            </Space>
+            <Row gutter={8}>
+              <Col xs={24} md={8}>
+                <Form.Item name="quantity" label="持有数量/份额">
+                  <InputNumber style={{ width: '100%' }} placeholder="股数/份额" disabled={editing?.source === 'derived'} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item name="cost_price" label="成本价（可选）">
+                  <InputNumber style={{ width: '100%' }} placeholder="用于盈亏" disabled={editing?.source === 'derived'} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item name="manual_value" label="手填市值">
+                  <InputNumber style={{ width: '100%' }} placeholder="现金/债券等" disabled={editing?.source === 'derived'} />
+                </Form.Item>
+              </Col>
+            </Row>
           )}
           {editing?.source === 'derived' && (
             <div style={{ color: '#888', fontSize: 12, marginTop: -8 }}>

@@ -9,6 +9,8 @@ import {
   CloseCircleOutlined, DeleteOutlined, ExclamationCircleOutlined,
   FileTextOutlined, LinkOutlined, ReloadOutlined, RobotOutlined, SendOutlined,
 } from '@ant-design/icons'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import {
   listResearchTemplates, listHoldings,
   listResearchReports, createResearchRun,
@@ -93,6 +95,93 @@ const STATUS_CONFIG = {
 const DISCLAIMER_ZH = 'AI 生成内容仅供研究记录，不构成投资建议。请自行核验关键数据和结论。'
 const DISCLAIMER_EN = 'AI-generated content is for research logging only and does not constitute investment advice. Please independently verify key data and conclusions.'
 
+// Styled component overrides for ReactMarkdown
+const mdComponents = {
+  h1: ({ children }) => (
+    <h1 style={{ fontSize: 20, fontWeight: 700, marginTop: 20, marginBottom: 10, borderBottom: '1px solid #f0f0f0', paddingBottom: 6 }}>{children}</h1>
+  ),
+  h2: ({ children }) => (
+    <h2 style={{ fontSize: 17, fontWeight: 600, marginTop: 18, marginBottom: 8 }}>{children}</h2>
+  ),
+  h3: ({ children }) => (
+    <h3 style={{ fontSize: 15, fontWeight: 600, marginTop: 14, marginBottom: 6 }}>{children}</h3>
+  ),
+  h4: ({ children }) => (
+    <h4 style={{ fontSize: 14, fontWeight: 600, marginTop: 10, marginBottom: 4 }}>{children}</h4>
+  ),
+  p: ({ children }) => (
+    <p style={{ marginBottom: 10, lineHeight: 1.75 }}>{children}</p>
+  ),
+  ul: ({ children }) => (
+    <ul style={{ paddingLeft: 22, marginBottom: 10, lineHeight: 1.7 }}>{children}</ul>
+  ),
+  ol: ({ children }) => (
+    <ol style={{ paddingLeft: 22, marginBottom: 10, lineHeight: 1.7 }}>{children}</ol>
+  ),
+  li: ({ children }) => (
+    <li style={{ marginBottom: 3 }}>{children}</li>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote style={{
+      borderLeft: '3px solid #1677ff', margin: '10px 0', padding: '8px 14px',
+      background: '#f0f5ff', borderRadius: '0 4px 4px 0', color: '#595959',
+    }}>
+      {children}
+    </blockquote>
+  ),
+  // Wrap table in a scrollable div so it doesn't break mobile layout
+  table: ({ children }) => (
+    <div style={{ overflowX: 'auto', marginBottom: 14, borderRadius: 4 }}>
+      <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 13, minWidth: 400 }}>
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ children }) => <thead>{children}</thead>,
+  tbody: ({ children }) => <tbody>{children}</tbody>,
+  th: ({ children }) => (
+    <th style={{ border: '1px solid #d9d9d9', padding: '6px 12px', background: '#fafafa', fontWeight: 600, textAlign: 'left', whiteSpace: 'nowrap' }}>
+      {children}
+    </th>
+  ),
+  td: ({ children }) => (
+    <td style={{ border: '1px solid #d9d9d9', padding: '6px 12px', verticalAlign: 'top' }}>
+      {children}
+    </td>
+  ),
+  // pre wraps fenced code blocks
+  pre: ({ children }) => (
+    <pre style={{
+      background: '#f5f5f5', padding: '10px 14px', borderRadius: 6,
+      overflowX: 'auto', fontSize: 12, lineHeight: 1.65, marginBottom: 12,
+      border: '1px solid #e8e8e8',
+    }}>
+      {children}
+    </pre>
+  ),
+  // code: inline when no className, block when className=language-*
+  code: ({ className, children }) => {
+    const isBlock = Boolean(className)
+    if (isBlock) {
+      return <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{children}</code>
+    }
+    return (
+      <code style={{
+        background: '#f0f0f0', padding: '1px 5px', borderRadius: 3,
+        fontSize: '0.88em', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+      }}>
+        {children}
+      </code>
+    )
+  },
+  a: ({ href, children }) => (
+    <a href={href} target="_blank" rel="noreferrer" style={{ color: '#1677ff' }}>{children}</a>
+  ),
+  hr: () => <hr style={{ border: 'none', borderTop: '1px solid #f0f0f0', margin: '14px 0' }} />,
+  strong: ({ children }) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
+  em: ({ children }) => <em style={{ fontStyle: 'italic' }}>{children}</em>,
+}
+
 const RUN_STEPS = ['准备上下文', '提交 AI 任务', '联网搜索与分析', '生成报告', '保存结果']
 
 function getStepCurrent(status) {
@@ -126,34 +215,43 @@ export default function Research() {
   const aiProvider = Form.useWatch('ai_provider', runForm) || 'deepseek'
 
   const pollingRef = useRef(null)
+  const reportsRef = useRef([])
 
   const hasRunning = reports.some((r) => r.status === 'running' || r.status === 'queued')
 
-  const refreshReports = useCallback(async () => {
+  useEffect(() => {
+    reportsRef.current = reports
+  }, [reports])
+
+  const refreshReports = useCallback(async ({ refreshRunning = false } = {}) => {
     try {
+      if (refreshRunning) {
+        const running = reportsRef.current.filter((r) => r.status === 'running' || r.status === 'queued')
+        await Promise.all(running.map((r) => refreshResearchRun(r.id).catch(() => null)))
+      }
       const fresh = await listResearchReports()
       setReports(fresh)
-      if (viewReport) {
-        const updated = fresh.find((r) => r.id === viewReport.id)
-        if (updated) setViewReport(updated)
-      }
+      setViewReport((current) => {
+        if (!current) return current
+        return fresh.find((r) => r.id === current.id) || current
+      })
+      return fresh
     } catch {
       // ignore
+      return reportsRef.current
     }
-  }, [viewReport])
+  }, [])
 
   useEffect(() => {
-    if (hasRunning) {
-      pollingRef.current = setInterval(async () => {
-        const running = reports.filter((r) => r.status === 'running' || r.status === 'queued')
-        await Promise.all(running.map((r) => refreshResearchRun(r.id).catch(() => null)))
-        await refreshReports()
-      }, 3000)
-    } else {
+    if (!hasRunning) {
       clearInterval(pollingRef.current)
+      return undefined
     }
+    const tick = () => refreshReports({ refreshRunning: true })
+    tick()
+    pollingRef.current = setInterval(tick, 3000)
     return () => clearInterval(pollingRef.current)
-  }, [hasRunning, reports, refreshReports])
+  }, [hasRunning, refreshReports])
 
   useEffect(() => {
     listResearchTemplates().then(setTemplates).catch(() => {})
@@ -218,6 +316,7 @@ export default function Research() {
       message.success('AI 研究任务已启动，正在后台处理…')
       setReports((prev) => [report, ...prev])
       setViewReport(report)
+      await refreshReports()
     } catch (e) {
       const detail = e.response?.data?.detail || e.message || ''
       if (detail.includes('AI 设置') || detail.includes('API Key')) {
@@ -654,15 +753,14 @@ function ReportDetail({ report, onBack, onRefresh, onCancel, onDelete, onRetry }
 
       {/* Report body */}
       {report.report_md ? (
-        <div style={{ marginBottom: 10 }}>
-          <pre style={{
-            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-            fontFamily: 'inherit', fontSize: 13, lineHeight: 1.6,
-            background: '#fafafa', padding: 12, borderRadius: 6,
-            border: '1px solid #f0f0f0', maxHeight: 480, overflowY: 'auto',
-          }}>
+        <div style={{
+          marginBottom: 10, maxHeight: 520, overflowY: 'auto',
+          padding: '4px 8px', border: '1px solid #f0f0f0', borderRadius: 6,
+          background: '#fff', fontSize: 13,
+        }}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
             {report.report_md}
-          </pre>
+          </ReactMarkdown>
         </div>
       ) : (
         !isActive && report.status !== 'failed' && (
