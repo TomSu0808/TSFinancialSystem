@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Alert, Button, Descriptions, Divider, Drawer, Layout, Menu, Dropdown, Avatar, Space,
-  Modal, Select, Tag, Typography, message, ConfigProvider, theme, Form, Input,
+  Modal, Select, Tag, Typography, message, ConfigProvider, theme, Form, Input, Popconfirm,
 } from 'antd'
 import {
   DashboardOutlined, AppstoreOutlined, ReadOutlined, SwapOutlined,
   UserOutlined, LogoutOutlined, DownloadOutlined, UploadOutlined,
   EyeOutlined, EyeInvisibleOutlined, BulbOutlined, SyncOutlined,
-  FundOutlined, MailOutlined, QuestionCircleOutlined,
+  FundOutlined, MailOutlined, QuestionCircleOutlined, KeyOutlined, DeleteOutlined,
 } from '@ant-design/icons'
 import { Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import Dashboard from './pages/Dashboard.jsx'
@@ -20,12 +20,28 @@ import Login from './pages/Login.jsx'
 import {
   getStoredUser, getToken, logout, exportBackup, importBackup,
   changePassword, changeEmail, resendVerification, verifyEmail, setSecurityQuestion,
+  listAIKeys, saveAIKey, deleteAIKey, testAIKey,
 } from './api'
 import { setMask } from './constants'
+import { ColorSchemeContext } from './colorScheme.jsx'
 
 const { Header, Content } = Layout
 const { Title, Text } = Typography
 const lsBool = (k) => localStorage.getItem(k) === '1'
+
+const AI_PROVIDER_OPTIONS = [
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'gpt', label: 'OpenAI (GPT)' },
+  { value: 'glm', label: 'GLM (智谱)' },
+  { value: 'claude', label: 'Claude (Anthropic)' },
+]
+
+const AI_DEFAULT_MODELS = {
+  deepseek: 'deepseek-v4-pro',
+  gpt: 'gpt-5.5',
+  glm: 'glm-4.6',
+  claude: 'claude-sonnet-4-5',
+}
 
 // 与后端 SECURITY_QUESTIONS 保持一致
 const SECURITY_QUESTIONS = [
@@ -41,6 +57,7 @@ export default function App() {
   const navigate = useNavigate()
   const [user, setUser] = useState(() => (getToken() ? getStoredUser() : null))
   const [dark, setDark] = useState(() => lsBool('dark'))
+  const [colorScheme, setColorScheme] = useState(() => localStorage.getItem('colorScheme') || 'cn')
   const [privacy, setPrivacy] = useState(() => lsBool('privacy'))
   const [autoRefresh, setAutoRefresh] = useState(() => lsBool('autoRefresh'))
   const [profileOpen, setProfileOpen] = useState(false)
@@ -51,6 +68,10 @@ export default function App() {
   const [resendLoading, setResendLoading] = useState(false)
   const [sqForm] = Form.useForm()
   const [sqLoading, setSqLoading] = useState(false)
+  const [aiKeyForm] = Form.useForm()
+  const [aiKeys, setAIKeys] = useState([])
+  const [aiKeySaveLoading, setAIKeySaveLoading] = useState(false)
+  const [aiKeyTestLoading, setAIKeyTestLoading] = useState(false)
   const fileRef = useRef(null)
 
   const showDevEmailLink = (url, title = '本地调试链接') => {
@@ -76,6 +97,10 @@ export default function App() {
     localStorage.setItem('dark', dark ? '1' : '0')
     document.body.style.background = dark ? '#000' : '#f0f2f5'
   }, [dark])
+
+  useEffect(() => {
+    localStorage.setItem('colorScheme', colorScheme)
+  }, [colorScheme])
 
   useEffect(() => {
     localStorage.setItem('autoRefresh', autoRefresh ? '1' : '0')
@@ -141,6 +166,81 @@ export default function App() {
       message.error('更改失败：' + (e.response?.data?.detail || e.message))
     } finally {
       setEmailLoading(false)
+    }
+  }
+
+  const loadAIKeys = async () => {
+    try {
+      const keys = await listAIKeys()
+      setAIKeys(keys)
+    } catch {
+      // ignore silently
+    }
+  }
+
+  useEffect(() => {
+    if (profileOpen && user) loadAIKeys()
+  }, [profileOpen])
+
+  const handleAIProviderChange = (provider) => {
+    aiKeyForm.setFieldValue('default_model', AI_DEFAULT_MODELS[provider] || '')
+  }
+
+  const doSaveAIKey = async () => {
+    let values
+    try {
+      values = await aiKeyForm.validateFields()
+    } catch {
+      return
+    }
+    setAIKeySaveLoading(true)
+    try {
+      await saveAIKey({
+        provider: values.provider,
+        api_key: values.api_key,
+        base_url: values.base_url || null,
+        default_model: values.default_model || null,
+        is_default: values.is_default || false,
+      })
+      message.success('API Key 已保存')
+      aiKeyForm.setFieldValue('api_key', '')
+      await loadAIKeys()
+    } catch (e) {
+      message.error('保存失败：' + (e.response?.data?.detail || e.message))
+    } finally {
+      setAIKeySaveLoading(false)
+    }
+  }
+
+  const doTestAIKey = async () => {
+    const values = aiKeyForm.getFieldsValue()
+    if (!values.provider) {
+      message.warning('请先选择 Provider')
+      return
+    }
+    setAIKeyTestLoading(true)
+    try {
+      await testAIKey({
+        provider: values.provider,
+        api_key: values.api_key || undefined,
+        base_url: values.base_url || undefined,
+        model: values.default_model || undefined,
+      })
+      message.success('连接测试成功！')
+    } catch (e) {
+      message.error('连接失败：' + (e.response?.data?.detail || e.message))
+    } finally {
+      setAIKeyTestLoading(false)
+    }
+  }
+
+  const doDeleteAIKey = async (id) => {
+    try {
+      await deleteAIKey(id)
+      message.success('已删除')
+      await loadAIKeys()
+    } catch (e) {
+      message.error('删除失败：' + (e.response?.data?.detail || e.message))
     }
   }
 
@@ -275,6 +375,11 @@ export default function App() {
         onClick: () => setDark((v) => !v),
       },
       {
+        key: 'colorScheme',
+        label: colorScheme === 'cn' ? '红涨绿跌（切换为绿涨红跌）' : '绿涨红跌（切换为红涨绿跌）',
+        onClick: () => setColorScheme((v) => (v === 'cn' ? 'us' : 'cn')),
+      },
+      {
         key: 'auto',
         icon: <SyncOutlined />,
         label: `进总览自动刷新：${autoRefresh ? '开' : '关'}`,
@@ -294,6 +399,7 @@ export default function App() {
     pwdForm.resetFields()
     emailForm.resetFields()
     sqForm.resetFields()
+    aiKeyForm.resetFields()
   }
 
   return (
@@ -336,14 +442,16 @@ export default function App() {
               }
             />
           )}
-          <Routes>
-            <Route path="/" element={<Dashboard autoRefresh={autoRefresh} />} />
-            <Route path="/platforms" element={<Platforms />} />
-            <Route path="/platforms/:id" element={<PlatformDetail />} />
-            <Route path="/transactions" element={<Transactions />} />
-            <Route path="/notes" element={<Notes />} />
-            <Route path="/research" element={<Research />} />
-          </Routes>
+          <ColorSchemeContext.Provider value={colorScheme}>
+            <Routes>
+              <Route path="/" element={<Dashboard autoRefresh={autoRefresh} />} />
+              <Route path="/platforms" element={<Platforms />} />
+              <Route path="/platforms/:id" element={<PlatformDetail />} />
+              <Route path="/transactions" element={<Transactions />} />
+              <Route path="/notes" element={<Notes />} />
+              <Route path="/research" element={<Research />} />
+            </Routes>
+          </ColorSchemeContext.Provider>
         </Content>
       </Layout>
 
@@ -498,6 +606,95 @@ export default function App() {
             <Button type="primary" loading={pwdLoading} onClick={submitPwd}>
               修改密码
             </Button>
+          </Form.Item>
+        </Form>
+
+        <Divider />
+        <Title level={5} style={{ marginTop: 0 }}>
+          <KeyOutlined style={{ marginRight: 6 }} />AI 设置
+        </Title>
+        <Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12 }}>
+          AI 投研将优先使用你配置的 API Key，同一 Provider 只存一条（重复保存则更新）。
+        </Text>
+
+        {/* 已保存 Key 列表 */}
+        {aiKeys.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            {aiKeys.map((k) => (
+              <div
+                key={k.id}
+                style={{
+                  display: 'flex', alignItems: 'center', marginBottom: 8,
+                  padding: '8px 10px', background: 'rgba(0,0,0,0.03)', borderRadius: 6,
+                  border: '1px solid rgba(0,0,0,0.06)',
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <Space size={4} wrap>
+                    <Tag color="blue" style={{ marginRight: 0 }}>
+                      {k.provider.toUpperCase()}
+                    </Tag>
+                    <Text code style={{ fontSize: 12 }}>****{k.key_last4}</Text>
+                    {k.default_model && (
+                      <Text type="secondary" style={{ fontSize: 11 }}>{k.default_model}</Text>
+                    )}
+                    {k.is_default && <Tag color="green" style={{ fontSize: 11, padding: '0 4px' }}>默认</Tag>}
+                  </Space>
+                  {k.last_used_at && (
+                    <div style={{ marginTop: 2 }}>
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        上次使用：{new Date(k.last_used_at).toLocaleString()}
+                      </Text>
+                    </div>
+                  )}
+                </div>
+                <Popconfirm
+                  title="确认删除此 API Key？"
+                  okText="删除"
+                  okButtonProps={{ danger: true }}
+                  cancelText="取消"
+                  onConfirm={() => doDeleteAIKey(k.id)}
+                >
+                  <Button type="text" danger icon={<DeleteOutlined />} size="small" />
+                </Popconfirm>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 添加 / 更新 Key 表单 */}
+        <Form form={aiKeyForm} layout="vertical" initialValues={{ provider: 'deepseek', default_model: 'deepseek-v4-pro', is_default: false }}>
+          <Form.Item name="provider" label="Provider" rules={[{ required: true, message: '请选择 Provider' }]}>
+            <Select
+              options={AI_PROVIDER_OPTIONS}
+              onChange={handleAIProviderChange}
+              placeholder="选择 AI Provider"
+            />
+          </Form.Item>
+          <Form.Item name="api_key" label="API Key" rules={[{ required: true, message: '请输入 API Key' }]}>
+            <Input.Password placeholder="sk-... 或 provider key" autoComplete="off" />
+          </Form.Item>
+          <Form.Item name="base_url" label="Base URL（可选）" extra="留空使用默认地址">
+            <Input placeholder="https://api.example.com/v1" autoComplete="off" />
+          </Form.Item>
+          <Form.Item name="default_model" label="默认模型">
+            <Input placeholder="如 deepseek-v4-pro、gpt-5.5 等" autoComplete="off" />
+          </Form.Item>
+          <Form.Item name="is_default" label="设为全局默认 Key" valuePropName="checked">
+            <Select style={{ width: 120 }}>
+              <Select.Option value={false}>否</Select.Option>
+              <Select.Option value={true}>是</Select.Option>
+            </Select>
+          </Form.Item>
+          <Form.Item>
+            <Space>
+              <Button loading={aiKeyTestLoading} onClick={doTestAIKey}>
+                测试连接
+              </Button>
+              <Button type="primary" loading={aiKeySaveLoading} onClick={doSaveAIKey}>
+                保存
+              </Button>
+            </Space>
           </Form.Item>
         </Form>
       </Drawer>

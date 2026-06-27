@@ -138,11 +138,13 @@ npm run dev
 | `SMTP_USERNAME` | SMTP 用户名 |
 | `SMTP_PASSWORD` | SMTP 密码 |
 | `SMTP_TLS` | `true` 使用 SSL/TLS，`false` 使用 STARTTLS，默认 `true` |
+| `APP_ENCRYPTION_KEY` | **生产环境必填**。用于加密用户 API Key 的 Fernet 密钥。生成命令：`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`。**警告**：更换此密钥后，已保存的用户 API Key 将无法解密，需让用户重新配置。 |
+| `ALLOW_SYSTEM_AI_FALLBACK` | `false`（默认）：用户必须在个人资料 → AI 设置中配置自己的 Key 才能使用 AI 投研。`true`：用户没有 Key 时可回退到系统全局 Key（站长自用模式）。 |
 | `AI_PROVIDER` | 默认 AI 提供方：`gpt`、`deepseek`、`glm` 或 `claude` |
-| `DEEPSEEK_API_KEY` | 使用 DeepSeek 时必填 |
-| `OPENAI_API_KEY` | 使用 GPT/OpenAI 时必填 |
-| `GLM_API_KEY` | 使用 GLM 时必填 |
-| `ANTHROPIC_API_KEY` | 使用 Claude 时必填 |
+| `DEEPSEEK_API_KEY` | 系统全局 DeepSeek Key（`ALLOW_SYSTEM_AI_FALLBACK=true` 时或站长自用） |
+| `OPENAI_API_KEY` | 系统全局 GPT/OpenAI Key |
+| `GLM_API_KEY` | 系统全局 GLM Key |
+| `ANTHROPIC_API_KEY` | 系统全局 Claude Key |
 | `FX_REFRESH_INTERVAL_SECONDS` | USD/CNY 汇率缓存时间，默认 21600 秒 |
 
 ## 部署到 Fly.io
@@ -158,7 +160,10 @@ fly secrets set ENV="production"
 fly secrets set SECRET_KEY="replace-with-a-long-random-string"
 fly secrets set APP_BASE_URL="https://tsfinancialsystem.fly.dev"
 
-# AI 投研（按需填写）
+# BYOK 加密密钥（必填）
+fly secrets set APP_ENCRYPTION_KEY="<生成的-fernet-key>" ALLOW_SYSTEM_AI_FALLBACK="false"
+
+# 系统全局 AI Key（仅 ALLOW_SYSTEM_AI_FALLBACK=true 时生效，或站长自用）
 fly secrets set DEEPSEEK_API_KEY="your-deepseek-api-key" AI_PROVIDER="deepseek"
 
 # 邮件服务（可选；未配置时验证链接打印到 fly logs）

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useContext } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Button, Card, Col, Empty, Row, Segmented, Space, Tag, Tooltip, message,
@@ -7,9 +7,7 @@ import { ReloadOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/
 import ReactECharts from 'echarts-for-react'
 import { getSummary, getSnapshots, refreshPrices, refreshRate } from '../api'
 import { CURRENCY_SYMBOL, CURRENCY_LABEL, ASSET_TYPE_LABEL, fmt, isMasked } from '../constants'
-
-const RED = '#cf1322'
-const GREEN = '#3f8600'
+import { useColorScheme } from '../colorScheme.jsx'
 
 function MetricCard({ label, value, sub, tone }) {
   return (
@@ -24,6 +22,7 @@ function MetricCard({ label, value, sub, tone }) {
 }
 
 export default function Dashboard({ autoRefresh = false }) {
+  const { upColor: RED, downColor: GREEN } = useColorScheme()
   const [currency, setCurrency] = useState('CNY')
   const [summary, setSummary] = useState(null)
   const [snapshots, setSnapshots] = useState([])

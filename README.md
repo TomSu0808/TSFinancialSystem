@@ -138,11 +138,13 @@ Important variables:
 | `SMTP_USERNAME` | SMTP username |
 | `SMTP_PASSWORD` | SMTP password |
 | `SMTP_TLS` | `true` for SSL/TLS; `false` for STARTTLS. Default: `true` |
+| `APP_ENCRYPTION_KEY` | **Required in production.** Fernet key for encrypting user API keys. Generate with: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. **Warning**: changing this key makes all saved user API keys unreadable. |
+| `ALLOW_SYSTEM_AI_FALLBACK` | `false` (default): users must configure their own API key in Profile → AI Settings. `true`: fall back to the system global key if the user has no personal key. |
 | `AI_PROVIDER` | Default AI provider: `gpt`, `deepseek`, `glm`, or `claude` |
-| `DEEPSEEK_API_KEY` | Required when using DeepSeek |
-| `OPENAI_API_KEY` | Required when using GPT/OpenAI |
-| `GLM_API_KEY` | Required when using GLM |
-| `ANTHROPIC_API_KEY` | Required when using Claude |
+| `DEEPSEEK_API_KEY` | System-level key for DeepSeek (used when `ALLOW_SYSTEM_AI_FALLBACK=true` or for admin use) |
+| `OPENAI_API_KEY` | System-level key for GPT/OpenAI |
+| `GLM_API_KEY` | System-level key for GLM |
+| `ANTHROPIC_API_KEY` | System-level key for Claude |
 | `FX_REFRESH_INTERVAL_SECONDS` | USD/CNY cache TTL. Default: 21600 seconds |
 
 ## Deploy To Fly.io
@@ -158,7 +160,10 @@ fly secrets set ENV="production"
 fly secrets set SECRET_KEY="replace-with-a-long-random-string"
 fly secrets set APP_BASE_URL="https://tsfinancialsystem.fly.dev"
 
-# AI research (set whichever provider you use)
+# BYOK encryption key (required)
+fly secrets set APP_ENCRYPTION_KEY="<your-fernet-key>" ALLOW_SYSTEM_AI_FALLBACK="false"
+
+# System-level AI key (only used when ALLOW_SYSTEM_AI_FALLBACK=true, or for admin use)
 fly secrets set DEEPSEEK_API_KEY="your-deepseek-api-key" AI_PROVIDER="deepseek"
 
 # Email (optional; if not set, verification links are printed to fly logs)

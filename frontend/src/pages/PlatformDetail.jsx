@@ -12,8 +12,10 @@ import {
   CURRENCIES, ASSET_TYPES, MARKETS, MARKET_LABEL, ASSET_TYPE_LABEL, CURRENCY_SYMBOL, fmt,
 } from '../constants'
 import { marketValue, dayChange, costBasis, profitOf, isDerived, isClosed, isAnomalous } from '../holdings'
+import { useColorScheme } from '../colorScheme.jsx'
 
 export default function PlatformDetail() {
+  const { upColor, downColor } = useColorScheme()
   const { id } = useParams()
   const platformId = Number(id)
   const [platform, setPlatform] = useState(null)
@@ -153,7 +155,7 @@ export default function PlatformDetail() {
         const c = dayChange(r)
         if (!c) return '—'
         const up = c >= 0
-        return <span style={{ color: up ? '#cf1322' : '#3f8600' }}>{up ? '+' : ''}{fmt(c)}</span>
+        return <span style={{ color: up ? upColor : downColor }}>{up ? '+' : ''}{fmt(c)}</span>
       },
     },
     {
@@ -173,7 +175,7 @@ export default function PlatformDetail() {
         const pct = cb ? (p / cb) * 100 : 0
         const up = p >= 0
         return (
-          <span style={{ color: up ? '#cf1322' : '#3f8600' }}>
+          <span style={{ color: up ? upColor : downColor }}>
             {up ? '+' : ''}{CURRENCY_SYMBOL[r.currency] || ''}{fmt(p)}
             <span style={{ fontSize: 12, marginLeft: 4 }}>({up ? '+' : ''}{pct.toFixed(1)}%)</span>
           </span>
@@ -188,7 +190,7 @@ export default function PlatformDetail() {
         const up = realized >= 0
         return (
           <Tooltip title={`已实现盈亏 ${fmt(r.realized_pnl || 0)} + 分红 ${fmt(r.realized_income || 0)}`}>
-            <span style={{ color: up ? '#cf1322' : '#3f8600' }}>
+            <span style={{ color: up ? upColor : downColor }}>
               {up ? '+' : ''}{CURRENCY_SYMBOL[r.currency] || ''}{fmt(realized)}
             </span>
           </Tooltip>

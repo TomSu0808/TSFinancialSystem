@@ -219,7 +219,15 @@ export default function Research() {
       setReports((prev) => [report, ...prev])
       setViewReport(report)
     } catch (e) {
-      message.error('启动失败：' + (e.response?.data?.detail || e.message))
+      const detail = e.response?.data?.detail || e.message || ''
+      if (detail.includes('AI 设置') || detail.includes('API Key')) {
+        message.error({
+          content: detail + ' 请点击右上角头像 → 个人资料 → AI 设置进行配置。',
+          duration: 8,
+        })
+      } else {
+        message.error('启动失败：' + detail)
+      }
       refreshReports()
     } finally {
       setLaunching(false)
@@ -278,6 +286,9 @@ export default function Research() {
       </Title>
       <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>
         选择 AI Berkshire 模板 → 注入持仓上下文 → AI 联网研究 → 自动生成并保存报告
+      </Text>
+      <Text type="secondary" style={{ display: 'block', fontSize: 11, marginBottom: 4 }}>
+        💡 AI 调用将优先使用你在「个人资料 → AI 设置」中配置的 API Key。
       </Text>
       <Text type="secondary" style={{ display: 'block', fontSize: 11, marginBottom: 16 }}>
         Research framework adapted from{' '}

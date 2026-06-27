@@ -394,6 +394,57 @@ class ResearchReportUpdate(SQLModel):
     report_md: Optional[str] = None
 
 
+class UserAIKey(SQLModel, table=True):
+    """用户自带 AI Provider API Key（BYOK）。同一用户同一 provider 只存一条。"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    provider: str = Field(index=True)          # gpt / deepseek / glm / claude
+    encrypted_api_key: str                      # Fernet 加密，绝不明文存储
+    key_last4: str = Field(default="")          # 明文后 4 位，用于前端展示
+    base_url: Optional[str] = None
+    default_model: Optional[str] = None
+    is_default: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    last_used_at: Optional[datetime] = None
+
+
+# ---- UserAIKey schemas ----
+
+class UserAIKeyCreate(SQLModel):
+    provider: str
+    api_key: str
+    base_url: Optional[str] = None
+    default_model: Optional[str] = None
+    is_default: bool = False
+
+
+class UserAIKeyUpdate(SQLModel):
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    default_model: Optional[str] = None
+    is_default: Optional[bool] = None
+
+
+class UserAIKeyRead(SQLModel):
+    id: int
+    provider: str
+    key_last4: str
+    base_url: Optional[str] = None
+    default_model: Optional[str] = None
+    is_default: bool
+    created_at: datetime
+    updated_at: datetime
+    last_used_at: Optional[datetime] = None
+
+
+class UserAIKeyTestInput(SQLModel):
+    provider: str
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+
+
 def market_value(h: Holding) -> float:
     """统一市值口径：手填金额优先，否则数量×现价。"""
     if h.manual_value is not None:

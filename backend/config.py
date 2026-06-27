@@ -3,6 +3,7 @@
 本地开发：复制 .env.example 为 .env 并按需修改。
 上云：在服务器/容器里设置同名环境变量即可（无需 .env 文件）。
 """
+import base64
 import os
 import secrets
 import sys
@@ -21,6 +22,25 @@ IS_PROD = ENV == "production"
 SECRET_KEY = os.getenv("SECRET_KEY") or (
     None if IS_PROD else secrets.token_urlsafe(32)
 )
+
+# API Key 加密密钥（Fernet 格式）。
+# 生成命令：python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# 生产环境必须显式设置；开发环境未配置时使用固定 dev 密钥（仅用于本地开发，不安全）。
+_DEV_FERNET_KEY = base64.urlsafe_b64encode(b"dev-only-key-not-for-production!").decode()
+APP_ENCRYPTION_KEY: str = os.getenv("APP_ENCRYPTION_KEY", "")
+if not APP_ENCRYPTION_KEY and not IS_PROD:
+    APP_ENCRYPTION_KEY = _DEV_FERNET_KEY
+    print(
+        "[WARN] APP_ENCRYPTION_KEY 未设置，使用开发默认密钥（不安全，仅限本地开发）。\n"
+        "       生成正式密钥：python -c \"from cryptography.fernet import Fernet; "
+        "print(Fernet.generate_key().decode())\"",
+        file=sys.stderr,
+    )
+
+# 是否允许在用户未配置自己的 API Key 时回退到系统全局 Key。
+# false（默认）：用户没有 Key 时直接提示去配置，不使用系统 Key。
+# true：用户没有 Key 时可以使用环境变量里的全局 AI Key（站长模式）。
+ALLOW_SYSTEM_AI_FALLBACK: bool = os.getenv("ALLOW_SYSTEM_AI_FALLBACK", "false").lower() == "true"
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = int(os.getenv("ACCESS_TOKEN_EXPIRE_DAYS", "7"))
@@ -55,6 +75,13 @@ def check_production_config() -> None:
 
     if not os.getenv("APP_BASE_URL"):
         errors.append("APP_BASE_URL 未设置")
+
+    if not os.getenv("APP_ENCRYPTION_KEY"):
+        errors.append(
+            "APP_ENCRYPTION_KEY 未设置（生产环境必须配置）。\n"
+            "  生成命令：python -c \"from cryptography.fernet import Fernet; "
+            "print(Fernet.generate_key().decode())\""
+        )
 
     if EMAIL_ENABLED:
         for var in ("SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "EMAIL_FROM"):

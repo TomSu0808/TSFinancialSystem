@@ -221,7 +221,8 @@ def test_create_run_saves_skill_md_and_language(engine2, user_a):
     """POST /runs 创建任务时保存 skill_md 和 report_language（mock AI）。"""
     client = _make_client(engine2, user_a)
 
-    with patch("ai_client.is_configured", return_value=True), \
+    with patch("research_service.ALLOW_SYSTEM_AI_FALLBACK", True), \
+         patch("ai_client.is_configured", return_value=True), \
          patch("ai_client.start_research", return_value="mock-response-id-123"):
         resp = client.post("/api/research/runs", json={
             "template_key": "investment-research",
@@ -244,7 +245,8 @@ def test_create_run_en_language(engine2, user_a):
     """英文任务 prompt 包含英文输出要求。"""
     client = _make_client(engine2, user_a)
 
-    with patch("ai_client.is_configured", return_value=True), \
+    with patch("research_service.ALLOW_SYSTEM_AI_FALLBACK", True), \
+         patch("ai_client.is_configured", return_value=True), \
          patch("ai_client.start_research", return_value="mock-id-en"):
         resp = client.post("/api/research/runs", json={
             "template_key": "investment-research",
@@ -261,17 +263,18 @@ def test_create_run_en_language(engine2, user_a):
 
 
 def test_create_run_no_ai_configured(engine2, user_a):
-    """AI 未配置时返回 400 错误，不创建报告。"""
+    """用户未配置 key 且 ALLOW_SYSTEM_AI_FALLBACK=false 时返回 400 并提示去配置。"""
     client = _make_client(engine2, user_a)
 
-    with patch("ai_client.is_configured", return_value=False):
+    with patch("research_service.ALLOW_SYSTEM_AI_FALLBACK", False):
         resp = client.post("/api/research/runs", json={
             "template_key": "investment-research",
             "target_name": "苹果公司",
         })
 
     assert resp.status_code == 400
-    assert "not configured" in resp.json().get("detail", "").lower()
+    detail = resp.json().get("detail", "")
+    assert "API Key" in detail or "AI 设置" in detail
     client.app.dependency_overrides.clear()
 
 

@@ -132,4 +132,11 @@ export const createResearchRun = (data) => client.post('/research/runs', data).t
 export const refreshResearchRun = (id) => client.post(`/research/runs/${id}/refresh`).then((r) => r.data)
 export const cancelResearchReport = (id) => client.post(`/research/reports/${id}/cancel`).then((r) => r.data)
 
+// ---- AI Key 管理（BYOK）----
+export const listAIKeys = () => client.get('/settings/ai-keys').then((r) => r.data)
+export const saveAIKey = (data) => client.post('/settings/ai-keys', data).then((r) => r.data)
+export const updateAIKey = (id, data) => client.put(`/settings/ai-keys/${id}`, data).then((r) => r.data)
+export const deleteAIKey = (id) => client.delete(`/settings/ai-keys/${id}`).then((r) => r.data)
+export const testAIKey = (data) => client.post('/settings/ai-keys/test', data).then((r) => r.data)
+
 export default client

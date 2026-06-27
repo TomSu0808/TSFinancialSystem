@@ -56,7 +56,10 @@ def choose_model(provider: Optional[str] = None, model: Optional[str] = None) ->
     return DEFAULT_MODELS.get(provider_key, AI_MODEL or "gpt-5.5")
 
 
-def is_configured(provider: Optional[str] = None) -> bool:
+def is_configured(provider: Optional[str] = None, api_key: Optional[str] = None) -> bool:
+    """Check if provider is usable. If api_key is explicitly provided, always returns True."""
+    if api_key:
+        return True
     provider_key = normalize_provider(provider)
     if provider_key == "gpt":
         return bool(os.getenv("OPENAI_API_KEY", ""))
@@ -108,40 +111,46 @@ def start_research(
     use_web_search: bool = True,
     provider: Optional[str] = None,
     model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
 ) -> str:
-    """Submit a research prompt. Returns the provider response ID."""
+    """Submit a research prompt. Returns the provider response ID.
+
+    api_key and base_url are user-supplied keys (BYOK). When provided they take
+    priority over the system environment variables.
+    """
     provider_key = normalize_provider(provider)
     chosen_model = choose_model(provider_key, model)
     prompt = _truncate(prompt)
 
     if provider_key == "gpt":
-        return _start_openai(prompt, use_web_search, chosen_model)
+        return _start_openai(prompt, use_web_search, chosen_model, api_key=api_key)
     if provider_key == "deepseek":
         return _start_openai_compatible(
             provider="deepseek",
             prompt=prompt,
             model=chosen_model,
-            api_key=os.getenv("DEEPSEEK_API_KEY", ""),
-            base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+            api_key=api_key or os.getenv("DEEPSEEK_API_KEY", ""),
+            base_url=base_url or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
         )
     if provider_key == "glm":
         return _start_openai_compatible(
             provider="glm",
             prompt=prompt,
             model=chosen_model,
-            api_key=os.getenv("GLM_API_KEY", ""),
-            base_url=os.getenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
+            api_key=api_key or os.getenv("GLM_API_KEY", ""),
+            base_url=base_url or os.getenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
         )
     if provider_key == "claude":
-        return _start_claude(prompt, chosen_model)
+        return _start_claude(prompt, chosen_model, api_key=api_key)
     raise AIServiceNotConfigured(f"Unsupported AI provider: {provider_key}")
 
 
-def _start_openai(prompt: str, use_web_search: bool, model: str) -> str:
-    api_key = os.getenv("OPENAI_API_KEY", "")
-    if not api_key:
+def _start_openai(prompt: str, use_web_search: bool, model: str, api_key: Optional[str] = None) -> str:
+    key = api_key or os.getenv("OPENAI_API_KEY", "")
+    if not key:
         raise AIServiceNotConfigured("GPT service is not configured. Please set OPENAI_API_KEY.")
-    client = _openai_client(api_key)
+    client = _openai_client(key)
 
     tools: List[Dict[str, str]] = []
     if use_web_search and AI_ENABLE_WEB_SEARCH:
@@ -169,15 +178,15 @@ def _start_openai_compatible(provider: str, prompt: str, model: str, api_key: st
     return _store_sync_response(provider, model, text)
 
 
-def _start_claude(prompt: str, model: str) -> str:
-    api_key = os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("CLAUDE_API_KEY", "")
-    if not api_key:
+def _start_claude(prompt: str, model: str, api_key: Optional[str] = None) -> str:
+    key = api_key or os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("CLAUDE_API_KEY", "")
+    if not key:
         raise AIServiceNotConfigured("Claude service is not configured. Please set ANTHROPIC_API_KEY.")
 
     response = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={
-            "x-api-key": api_key,
+            "x-api-key": key,
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         },
@@ -197,6 +206,73 @@ def _start_claude(prompt: str, model: str) -> str:
         if item.get("type") == "text"
     )
     return _store_sync_response("claude", model, text)
+
+
+def test_provider_connection(
+    provider: str,
+    api_key: str,
+    base_url: Optional[str] = None,
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
+    """轻量连接测试：发送最小 prompt，不保存结果。
+
+    成功：{"ok": True, "message": "连接成功"}
+    失败：{"ok": False, "message": "..."}  (错误信息不包含 api_key)
+    """
+    provider_key = normalize_provider(provider)
+    test_model = model or DEFAULT_MODELS.get(provider_key, "")
+
+    try:
+        if provider_key == "gpt":
+            client = _openai_client(api_key, base_url=base_url)
+            client.chat.completions.create(
+                model=test_model,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=5,
+            )
+        elif provider_key in ("deepseek", "glm"):
+            _base = base_url or (
+                os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+                if provider_key == "deepseek"
+                else os.getenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+            )
+            client = _openai_client(api_key, base_url=_base)
+            client.chat.completions.create(
+                model=test_model,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=5,
+            )
+        elif provider_key == "claude":
+            resp = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": test_model,
+                    "max_tokens": 5,
+                    "messages": [{"role": "user", "content": "ping"}],
+                },
+                timeout=30,
+            )
+            if resp.status_code >= 400:
+                err = resp.json().get("error", {}).get("message", f"HTTP {resp.status_code}")
+                raise RuntimeError(str(err)[:150])
+        else:
+            raise AIServiceNotConfigured(f"不支持的 provider: {provider_key}")
+
+        return {"ok": True, "message": "连接成功"}
+
+    except AIServiceNotConfigured as exc:
+        return {"ok": False, "message": str(exc)}
+    except Exception as exc:
+        # 截断错误并移除可能包含 key 的内容
+        msg = str(exc)[:200]
+        if api_key and api_key in msg:
+            msg = msg.replace(api_key, "***")
+        return {"ok": False, "message": f"连接失败：{msg}"}
 
 
 def retrieve_response(response_id: str) -> Any:

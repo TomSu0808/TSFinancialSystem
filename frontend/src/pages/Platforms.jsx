@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useColorScheme } from '../colorScheme.jsx'
 import { Link } from 'react-router-dom'
 import {
   Button, Card, Col, Empty, Form, Input, Modal, Popconfirm, Progress, Row, Segmented, Space, Table, Tag, message,
@@ -11,6 +12,7 @@ import { CURRENCY_SYMBOL, ASSET_TYPE_LABEL, fmt } from '../constants'
 import { marketValue, costBasis, profitOf, isDerived } from '../holdings'
 
 export default function Platforms() {
+  const { upColor, downColor } = useColorScheme()
   const [data, setData] = useState([])
   const [holdings, setHoldings] = useState([])
   const [fx, setFx] = useState(null)
@@ -154,7 +156,7 @@ export default function Platforms() {
           const pct = cb ? (p / cb) * 100 : 0
           const up = p >= 0
           return (
-            <span style={{ color: up ? '#cf1322' : '#3f8600' }}>
+            <span style={{ color: up ? upColor : downColor }}>
               {up ? '+' : ''}{CURRENCY_SYMBOL[r.currency] || ''}{fmt(p)}
               <span style={{ fontSize: 12, marginLeft: 4 }}>({up ? '+' : ''}{pct.toFixed(1)}%)</span>
             </span>

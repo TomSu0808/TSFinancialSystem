@@ -18,6 +18,7 @@ from database import init_db
 from routers import (
     auth, backup, fx, holdings, notes, platforms, research, snapshots, summary, transactions,
 )
+from routers import ai_keys
 
 
 @asynccontextmanager
@@ -47,6 +48,7 @@ app.include_router(snapshots.router)
 app.include_router(transactions.router)
 app.include_router(backup.router)
 app.include_router(research.router)
+app.include_router(ai_keys.router)
 
 
 @app.get("/api/health")
