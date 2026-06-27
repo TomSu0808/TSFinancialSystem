@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import CORS_ORIGINS
+from config import CORS_ORIGINS, check_production_config
 from database import init_db
 from routers import (
     auth, backup, fx, holdings, notes, platforms, research, snapshots, summary, transactions,
@@ -22,6 +22,7 @@ from routers import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    check_production_config()
     init_db()
     yield
 

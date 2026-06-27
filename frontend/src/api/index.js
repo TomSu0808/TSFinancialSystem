@@ -46,12 +46,36 @@ client.interceptors.response.use(
 
 // ---- 认证 ----
 export const register = (data) =>
-  client.post('/auth/register', data).then((r) => saveAuth(r.data))
+  client.post('/auth/register', data).then((r) => {
+    const user = saveAuth(r.data)
+    if (r.data.dev_verification_url) user.dev_verification_url = r.data.dev_verification_url
+    return user
+  })
 export const login = (data) =>
   client.post('/auth/login', data).then((r) => saveAuth(r.data))
 export const logout = () => clearAuth()
 export const changePassword = (data) =>
   client.post('/auth/change-password', data).then((r) => r.data)
+export const getMe = () =>
+  client.get('/auth/me').then((r) => r.data)
+export const resendVerification = () =>
+  client.post('/auth/resend-verification').then((r) => r.data)
+export const verifyEmail = (token) =>
+  client.post('/auth/verify-email', { token }).then((r) => r.data)
+export const changeEmail = (data) =>
+  client.post('/auth/change-email', data).then((r) => r.data)
+export const forgotPassword = (email) =>
+  client.post('/auth/forgot-password', { email }).then((r) => r.data)
+export const resetPassword = (token, new_password) =>
+  client.post('/auth/reset-password', { token, new_password }).then((r) => r.data)
+export const listSecurityQuestions = () =>
+  client.get('/auth/security-questions').then((r) => r.data)
+export const getRecoveryQuestion = (username) =>
+  client.post('/auth/recovery-question', { username }).then((r) => r.data)
+export const resetPasswordBySecurityQuestion = (data) =>
+  client.post('/auth/reset-password-by-security-question', data).then((r) => r.data)
+export const setSecurityQuestion = (data) =>
+  client.post('/auth/set-security-question', data).then((r) => r.data)
 
 // ---- 平台 ----
 export const listPlatforms = () => client.get('/platforms').then((r) => r.data)

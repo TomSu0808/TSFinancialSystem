@@ -2,11 +2,21 @@
 
 表：platform / holding / fxrate / snapshot
 """
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
+
+# 固定安全问题列表（key → 展示文本）
+SECURITY_QUESTIONS: dict[str, str] = {
+    "primary_school": "你的小学在哪？",
+    "su_yanzu_handsome": "苏彦祖帅吗？",
+    "favorite_car": "你最喜欢的车",
+    "first_phone": "你的第一个手机是什么？",
+    "favorite_game": "你最喜欢的游戏是什么？",
+}
 
 
 # ----------------------------- 枚举 -----------------------------
@@ -48,9 +58,32 @@ class HoldingStatus(str, Enum):
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     username: str = Field(index=True, unique=True)
-    email: Optional[str] = Field(default=None, index=True)  # 阶段2 邮箱找回用
+    email: Optional[str] = Field(default=None, index=True)
+    email_normalized: Optional[str] = Field(default=None, index=True)
+    email_verified: bool = Field(default=False)
+    email_verified_at: Optional[datetime] = Field(default=None)
     password_hash: str = ""
+    password_changed_at: Optional[datetime] = Field(default=None)
+    last_login_at: Optional[datetime] = Field(default=None)
+    status: str = Field(default="active")  # active / disabled
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    # 安全问题（用于找回密码）
+    security_question_key: Optional[str] = Field(default=None)
+    security_answer_hash: Optional[str] = Field(default=None)
+    security_question_updated_at: Optional[datetime] = Field(default=None)
+
+
+class AuthToken(SQLModel, table=True):
+    """邮箱验证和密码重置 token（存 sha256 hash，不存明文）。"""
+    __tablename__ = "authtoken"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    token_hash: str = Field(index=True)
+    purpose: str  # "email_verification" | "password_reset"
+    expires_at: datetime
+    used_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_ip: Optional[str] = Field(default=None)
 
 
 class Platform(SQLModel, table=True):
@@ -170,10 +203,16 @@ class HoldingUpdate(SQLModel):
     cost_price: Optional[float] = None
 
 
+_USERNAME_RE = re.compile(r'^[a-zA-Z0-9_-]{3,32}$')
+_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+
 class UserCreate(SQLModel):
     username: str
+    email: Optional[str] = None  # 可选；填写后自动发送验证邮件
     password: str
-    email: Optional[str] = None
+    security_question_key: str  # 必须是 SECURITY_QUESTIONS 中的 key
+    security_answer: str        # 明文，后端 hash 后存储
 
 
 class UserLogin(SQLModel):
@@ -185,6 +224,12 @@ class UserRead(SQLModel):
     id: int
     username: str
     email: Optional[str] = None
+    email_verified: bool = False
+    status: str = "active"
+    has_email: bool = False
+    has_security_question: bool = False
+    security_question_key: Optional[str] = None
+    security_question_text: Optional[str] = None
 
 
 class PasswordChange(SQLModel):
@@ -192,10 +237,45 @@ class PasswordChange(SQLModel):
     new_password: str
 
 
+class ForgotPassword(SQLModel):
+    email: str
+
+
+class ResetPassword(SQLModel):
+    token: str
+    new_password: str
+
+
+class VerifyEmailInput(SQLModel):
+    token: str
+
+
+class ChangeEmailInput(SQLModel):
+    new_email: str
+
+
+class SetSecurityQuestionInput(SQLModel):
+    current_password: str
+    security_question_key: str
+    security_answer: str
+
+
+class RecoveryQuestionInput(SQLModel):
+    username: str
+
+
+class ResetBySecurityQuestionInput(SQLModel):
+    username: str
+    security_question_key: str
+    security_answer: str
+    new_password: str
+
+
 class Token(SQLModel):
     access_token: str
     token_type: str = "bearer"
     user: UserRead
+    dev_verification_url: Optional[str] = None
 
 
 class TransactionCreate(SQLModel):

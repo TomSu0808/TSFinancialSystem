@@ -102,7 +102,9 @@ def create_run(
 
     if not ai_client.is_configured(provider):
         raise AIServiceNotConfigured(
-            f"{provider} service is not configured. Please set the provider API key in backend/.env."
+            f"{provider} service is not configured. Set the provider API key in backend/.env "
+            "for local development, or with your host's environment/secrets system in production "
+            "(for Fly.io, use `fly secrets set`)."
         )
 
     # 3. Validate holding ownership

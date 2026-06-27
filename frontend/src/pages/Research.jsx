@@ -71,11 +71,11 @@ const SKILL_MODE = {
   'quality-screen':      '快速模式',
 }
 
-const MODE_COLOR = { '深度模式': 'blue', '快速模式': 'green', '普通模式': 'default' }
+const MODE_COLOR = { '深度模式': 'magenta', '快速模式': 'green', '普通模式': 'default' }
 
 const CATEGORY_COLOR = {
   '深度研究': 'blue',
-  '财报分析': 'green',
+  '财报分析': 'cyan',
   '行业筛选': 'orange',
   '持仓管理': 'purple',
 }
@@ -329,7 +329,9 @@ export default function Research() {
                       <Tag color={CATEGORY_COLOR[tpl.category] || 'default'} style={{ fontSize: 11 }}>
                         {tpl.category}
                       </Tag>
-                      <Tag color={MODE_COLOR[mode]} style={{ fontSize: 10 }}>{mode}</Tag>
+                      {mode !== tpl.category && (
+                        <Tag color={MODE_COLOR[mode]} style={{ fontSize: 10 }}>{mode}</Tag>
+                      )}
                     </Space>
                     <div style={{ fontSize: 11, color: '#888', lineHeight: 1.3 }}>
                       {tpl.description}

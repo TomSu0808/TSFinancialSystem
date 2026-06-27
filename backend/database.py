@@ -37,6 +37,17 @@ def _migrate_add_user_id() -> None:
     """
     # 表名 -> 需要补的列（列名: SQL 类型）
     wanted = {
+        "user": {
+            "email_normalized": "VARCHAR",
+            "email_verified": "INTEGER DEFAULT 0",
+            "email_verified_at": "DATETIME",
+            "password_changed_at": "DATETIME",
+            "last_login_at": "DATETIME",
+            "status": "VARCHAR DEFAULT 'active'",
+            "security_question_key": "VARCHAR",
+            "security_answer_hash": "VARCHAR",
+            "security_question_updated_at": "DATETIME",
+        },
         "platform": {"user_id": "INTEGER"},
         "holding": {
             "user_id": "INTEGER",

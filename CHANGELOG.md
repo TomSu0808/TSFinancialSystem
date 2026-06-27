@@ -18,6 +18,43 @@
 
 <!-- 在下面这条横线下方追加新记录，保持最新在最上 -->
 
+## [新增] - 2026-06-27 认证系统升级：邮箱验证、找回密码、旧 Token 失效与限流
+
+### 类型：✨新增 / 💥破坏性变更（注册字段）
+
+- **改了什么**：
+  - **User 模型**：新增 `email_normalized`（唯一性用）、`email_verified`、`email_verified_at`、`password_changed_at`、`last_login_at`、`status`（active/disabled）字段；新增 `AuthToken` 表（统一存储邮箱验证和密码重置 token 的 sha256 哈希）。
+  - **注册**：`email` 改为必填；username 加正则校验（3–32 位字母/数字/下划线/短横线）；密码最少 8 位；注册后自动发送邮箱验证邮件；`email_normalized` 唯一约束在应用层校验。
+  - **新接口**：`POST /api/auth/resend-verification`（重发验证邮件，需登录，限流 3次/小时）；`POST /api/auth/verify-email`（验证邮箱 token）；`POST /api/auth/forgot-password`（防枚举，统一返回同样响应，限流 5次/小时）；`POST /api/auth/reset-password`（重置密码，token 有效期 30 分钟）。
+  - **JWT 旧 token 失效**：`create_access_token` 加入 `iat`；`get_current_user` 检查 `iat < password_changed_at` 或 `status != active` 时返回 401，使 `change-password` 和 `reset-password` 后旧 JWT 立即作废。
+  - **进程内限流**：新增 `rate_limit.py`，滑动窗口计数，不依赖 Redis；覆盖注册、登录、重发验证、忘记密码。
+  - **邮件服务**：新增 `email_service.py`；`EMAIL_ENABLED=false`（默认）时打印验证链接到控制台方便本地开发，`true` 时通过 SMTP 发送；生产日志不打印 token 明文。
+  - **生产配置检查**：`ENV=production` 时启动检查 `SECRET_KEY`/`APP_BASE_URL`/SMTP 配置完整性，缺失则 `sys.exit(1)`。
+  - **前端**：注册表单 email 改必填、密码改 8 位下限；Login 页新增"忘记密码"表单（防枚举统一提示）和"重置密码"表单（从 URL `?token=` 读取）；App.jsx 已登录但邮箱未验证时显示不阻塞的顶部 Alert + "重新发送验证邮件"按钮；已登录时处理 `/verify-email?token=` 链接。
+  - **测试**：新增 `backend/tests/test_auth.py`，覆盖 17 个场景（注册校验、邮箱验证、防枚举、token 失效、disabled 用户、限流核心）；全套 68 个测试通过。
+- **为什么**：项目已公开开放注册，需要邮箱验证闭环防止垃圾账号；密码修改/重置后旧 JWT 立即失效是基本安全要求；找回密码是必要的用户体验；生产配置检查避免上线后忘记设 SECRET_KEY。
+- **影响范围**：`backend/models.py`、`backend/auth.py`、`backend/routers/auth.py`、`backend/database.py`（迁移补列）、`backend/config.py`、新增 `backend/email_service.py`、新增 `backend/rate_limit.py`、`backend/main.py`、新增 `backend/tests/test_auth.py`、`backend/.env.example`；前端 `frontend/src/api/index.js`、`frontend/src/pages/Login.jsx`、`frontend/src/App.jsx`。
+- **注意事项**：
+  - **注册字段破坏性变更**：`email` 改为必填，现有前端客户端若依赖旧接口（email 为可选）需同步更新。
+  - 老库无需手动迁移，`init_db()` 启动时自动给 `user` 表补 6 个新列（additive/幂等）；`AuthToken` 表自动建。
+  - **本地开发验证邮箱**：`EMAIL_ENABLED=false` 时，注册后在终端看 `[DEV EMAIL]` 打印的链接，复制到浏览器即可。
+  - **Fly.io 上线前**需 `fly secrets set ENV=production SECRET_KEY=<random> APP_BASE_URL=https://tsfinancialsystem.fly.dev`，如需真实邮件还需配置 `EMAIL_ENABLED=true SMTP_HOST=... SMTP_USERNAME=... SMTP_PASSWORD=...`。
+  - 后端 `pytest` 68/68 通过；前端 `npm run build` 通过。
+
+## [优化] - 2026-06-27 GitHub README、部署配置与资产驾驶舱布局
+### 类型：📝文档 / ⚡优化 / 🐛修复
+- **改了什么**：重写 GitHub README，新增英文主 README 与中文 `README.zh-CN.md`，顶部加入语言切换、线上站点 `https://tsfinancialsystem.fly.dev/`、项目截图、功能亮点、部署说明和路线图；补充 `backend/.env.example` 中的 AI provider 与汇率缓存配置；修正 DeepSeek 未配置时的错误提示，明确本地用 `backend/.env`、Fly.io 生产环境用 `fly secrets set`；汇率接口改为首次/过期自动刷新，避免长期显示默认 `7.2`；前端总览页重排为资产驾驶舱，新增现金占比、股票/ETF 占比、最大平台、累计收益率卡片，并将总资产走势提前；平台管理页改为“资产账户”页，新增账户卡片区和账户明细表；顶栏导航改为“总览 / 资产 / 交易 / 投研 / 笔记”。
+- **为什么**：让 GitHub 首页更直观，访问者能立刻看到线上 Demo、截图、功能价值和中英文介绍；解决 Fly.io 上使用 DeepSeek 时环境变量未配置但错误提示误导的问题；让汇率展示更接近实时缓存逻辑；把产品布局从“后台管理表格”调整为更适合日常查看的个人资产驾驶舱。
+- **影响范围**：`README.md`、`README.zh-CN.md`、`backend/.env.example`、`backend/research_service.py`、`backend/routers/fx.py`、`backend/tests/test_fx.py`、`frontend/src/App.jsx`、`frontend/src/pages/Dashboard.jsx`、`frontend/src/pages/Platforms.jsx`。
+- **注意事项**：本地改动尚未推送 GitHub、也尚未部署到 Fly.io；线上生效需要先配置 `fly secrets set DEEPSEEK_API_KEY="..." AI_PROVIDER="deepseek"`，再执行 `fly deploy`。已验证：后端 `pytest` 通过，前端 `npm run build` 通过；Vite 仍有原有大 chunk 提示，不影响运行。
+
+## [新增] - 2026-06-26 AI 投研工作台
+### 类型：✨新增
+- **改了什么**：新增投研工作台模块，接入 AI Berkshire 风格投研模板与本地 vendored skill 资源；支持生成单公司研究、投资委员会讨论、买入前检查、段永平提问、财报复盘、行业研究、组合复盘、新闻脉冲、投资 thesis 跟踪等报告；支持关联当前持仓、自动带入平台/币种/数量/成本/市值/盈亏等上下文；新增手动 prompt 生成、AI 直接生成、报告列表、报告详情、编辑、删除、刷新状态、取消任务、来源引用与免责声明；AI provider 抽象支持 GPT、DeepSeek、GLM、Claude，并保存 provider、model、prompt、skill_md、input_context、report_language、sources 等可复盘字段。
+- **为什么**：把“资产记录”扩展到“投资研究闭环”，让持仓数据可以直接进入研究模板，减少复制粘贴和空白 prompt，形成从资产、交易、笔记到投研报告的工作流。
+- **影响范围**：后端新增/更新 `ai_client.py`、`research_service.py`、`research_prompt_builder.py`、`research_templates.py`、`ai_berkshire_loader.py`、`routers/research.py`、`research_assets/ai_berkshire/`、`models.py`、`routers/backup.py`；前端新增/更新 `pages/Research.jsx`、`api/index.js`、`App.jsx`；测试覆盖 `backend/tests/test_research.py`。
+- **注意事项**：使用 AI 直接生成报告需要在本地 `.env` 或生产环境 secrets 中配置对应 provider API key，例如 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`GLM_API_KEY`、`ANTHROPIC_API_KEY`；AI 生成内容仅用于投研记录，不构成投资建议。已通过 mock AI 的后端测试验证核心流程。
+
 ## [新增] - 2026-06-16 交易驱动持仓（前端 UX · Plan 2）
 ### 类型：✨新增
 - **改了什么**：新建资产支持「按交易记录」（记一笔买入自动建 derived 持仓）/「直接手填」两种模式；derived 持仓数量/成本只读并标「流水」🔗、编辑禁用、不可直接删除；持仓表新增「已实现」列、清仓持仓默认隐藏（开关可显示并标「已清仓」）、卖超显示「数量异常」；总览顶部「累计盈亏」升级为「总收益」并悬浮拆分 未实现/已实现/分红；交易页文案改为说明会驱动持仓、保存后提示已同步；平台展开行标记 derived 持仓。

@@ -1,216 +1,225 @@
 <div align="center">
 
-# 个人资产管理平台 · Personal Asset Manager
+# TSFinancialSystem
 
-**A self-hosted, multi-currency portfolio tracker for stocks, funds, bonds, crypto & cash.**
-按平台与币种统一管理多类资产，实时行情与汇率、总资产与盈亏一目了然。
+**A self-hosted portfolio and investment research system for multi-currency personal assets.**
+
+[Live Site](https://tsfinancialsystem.fly.dev/) ·
+[中文](README.zh-CN.md) ·
+[Architecture](ARCHITECTURE.md) ·
+[Changelog](CHANGELOG.md)
 
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.128-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
 [![Ant Design](https://img.shields.io/badge/Ant%20Design-5-0170FE?logo=antdesign&logoColor=white)](https://ant.design/)
-[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](./Dockerfile)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#-license)
+[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
 
----
+## What It Does
 
-## 📖 Overview · 项目简介
+TSFinancialSystem helps you track stocks, funds, bonds, crypto, cash, and investment notes in one private web app. Assets are organized by platform and currency, with live quotes, USD/CNY exchange rates, transaction-driven holdings, net-worth charts, allocation views, and AI-assisted research reports.
 
-A lightweight, **privacy-first** portfolio manager you run yourself. Organize holdings by
-**platform** (Futu, IBKR, …) and **currency** (CNY / USD / HKD), pull live quotes and FX
-rates on demand, and see total net worth, daily change, and cumulative P&L at a glance.
+It is designed for people who want a clear personal finance cockpit without handing their portfolio data to a third-party SaaS platform.
 
-一个轻量、**数据自持**的资产管理平台：按**平台**（富途 / 盈透等）+ **币种**（人民币 / 美元 / 港币）
-管理股票、基金、债券、加密、现金等资产，一键刷新行情与汇率，实时查看总资产、今日涨跌与累计盈亏。
+## Live Site
 
-> **Decoupled frontend & backend**, containerized, and ready to deploy to any cloud —
-> access from your phone or computer over HTTPS.
-> 前后端分离 + 容器化，可一键上云，手机 / 电脑随时随地访问。
+The project is deployed at:
 
----
+**https://tsfinancialsystem.fly.dev/**
 
-## ✨ Features · 功能特性
+The app supports account registration, login, multi-user data isolation, and HTTPS access through Fly.io.
 
-| | Feature | 说明 |
-|---|---|---|
-| 📊 | **Unified dashboard** | 总览：总资产、今日涨跌、未实现/已实现盈亏 + 分红，¥/$ 一键切换 |
-| 🏦 | **Platform & holdings management** | 按平台分组管理持仓，查看各平台市值与仓位占比 |
-| 📈 | **Live quotes & FX** | A 股 / 港股 / 美股 / 基金 / 加密实时行情 + USD·CNY 汇率，手动刷新最可控 |
-| 💹 | **P&L & net-worth trend** | 基于成本价的累计盈亏，每日净值快照绘制资产走势曲线 |
-| 🥧 | **Allocation insights** | 按资产类型与平台的配置占比饼图 |
-| 🧾 | **Transaction-driven holdings** | 买入/卖出流水自动驱动持仓数量与移动加权成本；卖出结转已实现盈亏；分红计入已实现收益 |
-| 📒 | **Investment journal** | 自由记录投资心得与备忘 |
-| 🔐 | **Multi-user auth** | JWT 登录，数据按用户隔离，密钥与配置全走环境变量 |
-| 🕶️ | **Privacy & dark mode** | 一键打码所有金额（截图 / 公共场合）、深色主题 |
-| 💾 | **Backup & restore** | 整账 JSON 导出 / 导入，方便迁移与备份 |
-| 📱 | **Responsive & PWA-ready** | 同一局域网手机直接访问，上云后公网可用 |
+## Highlights
 
----
+| Area | What you get |
+|---|---|
+| Portfolio dashboard | Total assets, daily change, total return, realized/unrealized P&L, dividend income, and net-worth history |
+| Multi-currency assets | CNY, USD, and HKD holdings with USD/CNY exchange-rate conversion |
+| Platform-based tracking | Group assets by brokerage or account, such as Futu, IBKR, Tiger, banks, wallets, or custom platforms |
+| Live market data | A-share, HK, US, fund, crypto, and FX data through free data sources |
+| Transaction-driven holdings | Buy/sell/dividend records automatically update quantity, weighted-average cost, realized P&L, and closed positions |
+| Manual assets | Track cash, bonds, private funds, or assets without quote APIs through manually entered market value |
+| Investment journal | Write and manage notes for investment decisions, reviews, and thesis tracking |
+| AI research workspace | Generate research prompts and reports with GPT, DeepSeek, GLM, or Claude-compatible providers |
+| Privacy tools | User authentication, data isolation, amount masking, dark mode, backup, and restore |
+| Self-hosted deployment | One Docker image serves both React and FastAPI, with SQLite persisted on a Fly.io volume |
 
-## 🧱 Tech Stack · 技术栈
+## Product Flow
+
+1. Create platforms for your accounts, brokers, or wallets.
+2. Add manual holdings or create transaction records.
+3. Refresh quotes and exchange rates on demand.
+4. Review total assets, returns, allocation, and net-worth trend.
+5. Keep investment notes and generate AI-assisted research reports.
+6. Export a full-account JSON backup when needed.
+
+## Tech Stack
 
 | Layer | Stack |
 |---|---|
-| **Backend** | FastAPI · SQLModel · SQLite · [akshare](https://github.com/akfamily/akshare) · python-jose (JWT) · bcrypt |
-| **Frontend** | React 18 · Vite · Ant Design 5 · ECharts · React Router · Axios |
-| **Infra** | Docker (multi-stage) · Fly.io · persistent volume |
+| Backend | FastAPI, SQLModel, SQLite, JWT auth, akshare, CoinGecko, OpenAI-compatible AI clients |
+| Frontend | React 18, Vite, Ant Design 5, ECharts, React Router, Axios |
+| Infrastructure | Docker multi-stage build, Fly.io, persistent volume |
+| Data | SQLite by default, optional database URL support for future migration |
 
----
+## Data Sources
 
-## 🚀 Quick Start · 本地启动
+| Data | Source | Notes |
+|---|---|---|
+| A-share, HK, US stocks, on-market funds | akshare / Eastmoney snapshots | Free data, usually delayed |
+| Off-market funds | akshare fund NAV | Latest available NAV by fund code |
+| Crypto | CoinGecko free API | Supports common symbols and CoinGecko IDs |
+| USD/CNY FX | open.er-api.com | Falls back to Bank of China data |
 
-**Prerequisites · 前置要求**：Python 3.10+、Node.js 18+
+## Local Development
+
+Prerequisites:
+
+- Python 3.10+
+- Node.js 18+
 
 ```bash
-# Clone
 git clone https://github.com/TomSu0808/TSFinancialSystem.git
 cd TSFinancialSystem
-
-# One command — auto-creates venv, installs deps, starts both servers
-# 一键启动：自动建虚拟环境、装依赖、起前后端并打开浏览器
-python3 dev.py start        # macOS / Linux  (Windows: 双击 start.bat)
+python dev.py start
 ```
+
+The launcher creates the backend virtual environment, installs dependencies, starts FastAPI and Vite, and opens the app.
 
 | Service | URL |
 |---|---|
-| Frontend / 前端 | http://localhost:5173 |
+| Frontend | http://localhost:5173 |
 | Backend API | http://localhost:8000 |
-| API Docs (Swagger) | http://localhost:8000/docs |
+| API docs | http://localhost:8000/docs |
 
-Stop with `Ctrl+C`, or run `python3 dev.py stop`.
-首次打开请先注册账号；同一 Wi-Fi 下用前端日志里的 `Network` 地址即可手机访问。
-
-<details>
-<summary>Manual setup · 手动分步启动</summary>
+Stop the dev servers:
 
 ```bash
-# Backend
-cd backend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload          # http://localhost:8000
+python dev.py stop
+```
 
-# Frontend (new terminal)
+Manual startup:
+
+```bash
+cd backend
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn main:app --reload
+```
+
+```bash
 cd frontend
 npm install
-npm run dev                        # http://localhost:5173
+npm run dev
 ```
-</details>
 
----
+## Configuration
 
-## ☁️ Deployment · 部署上云
+For local development, copy `backend/.env.example` to `backend/.env`.
 
-The app ships as a **single Docker image**: the React build is served by FastAPI, so
-frontend and backend are same-origin (no CORS), and SQLite lives on a **persistent volume**.
+Important variables:
 
-整个应用打包为**单个 Docker 镜像**：FastAPI 同源托管前端构建产物，SQLite 数据落在**持久卷**上，
-重新部署不丢数据。以 [Fly.io](https://fly.io) 为例：
+| Variable | Purpose |
+|---|---|
+| `SECRET_KEY` | JWT signing key. Must be set to a stable random value in production |
+| `ENV` | `production` enables startup config checks (exits if required vars are missing) |
+| `DATA_DIR` | Directory for the SQLite database, such as `/data` on Fly.io |
+| `DATABASE_URL` | Optional full database URL |
+| `ALLOW_REGISTRATION` | Enable or disable public registration (default `true`) |
+| `APP_BASE_URL` | Public URL used for email verification and password-reset links. Required in production |
+| `EMAIL_ENABLED` | `false` (default) prints verification links to the console; `true` sends real email via SMTP. Only needed if users set an email address |
+| `EMAIL_FROM` | Sender address for outgoing emails |
+| `SMTP_HOST` | SMTP server hostname |
+| `SMTP_PORT` | SMTP port. Default: 587 |
+| `SMTP_USERNAME` | SMTP username |
+| `SMTP_PASSWORD` | SMTP password |
+| `SMTP_TLS` | `true` for SSL/TLS; `false` for STARTTLS. Default: `true` |
+| `AI_PROVIDER` | Default AI provider: `gpt`, `deepseek`, `glm`, or `claude` |
+| `DEEPSEEK_API_KEY` | Required when using DeepSeek |
+| `OPENAI_API_KEY` | Required when using GPT/OpenAI |
+| `GLM_API_KEY` | Required when using GLM |
+| `ANTHROPIC_API_KEY` | Required when using Claude |
+| `FX_REFRESH_INTERVAL_SECONDS` | USD/CNY cache TTL. Default: 21600 seconds |
+
+## Deploy To Fly.io
+
+This repository builds into one Docker image. FastAPI serves the compiled React app, so the deployed app is same-origin and does not need a separate frontend host.
 
 ```bash
-fly launch --no-deploy                       # 读取仓库内的 fly.toml
-fly volumes create data --size 1 --region nrt  # 持久卷（与 app 同地区）
-fly secrets set SECRET_KEY="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+fly launch --no-deploy
+fly volumes create data --size 1 --region nrt
+
+# Required
+fly secrets set ENV="production"
+fly secrets set SECRET_KEY="replace-with-a-long-random-string"
+fly secrets set APP_BASE_URL="https://tsfinancialsystem.fly.dev"
+
+# AI research (set whichever provider you use)
+fly secrets set DEEPSEEK_API_KEY="your-deepseek-api-key" AI_PROVIDER="deepseek"
+
+# Email (optional; if not set, verification links are printed to fly logs)
+fly secrets set EMAIL_ENABLED="true"
+fly secrets set EMAIL_FROM="noreply@yourdomain.com"
+fly secrets set SMTP_HOST="smtp.example.com"
+fly secrets set SMTP_PORT="587"
+fly secrets set SMTP_USERNAME="your-smtp-user"
+fly secrets set SMTP_PASSWORD="your-smtp-password"
+
 fly deploy
 ```
 
-Configuration via environment variables · 环境变量配置（见 [`backend/.env.example`](backend/.env.example)）：
+Local `.env` files are not uploaded to Fly.io. Production keys must be set with `fly secrets set`.
 
-| Variable | Default | Description |
-|---|---|---|
-| `SECRET_KEY` | random | JWT signing key — **set a fixed value in production** |
-| `ACCESS_TOKEN_EXPIRE_DAYS` | `7` | Login validity (days) |
-| `CORS_ORIGINS` | `*` | Allowed origins (tighten in production) |
-| `ALLOW_REGISTRATION` | `true` | Toggle self-service signup |
-| `DATA_DIR` | — | Directory for SQLite file (point to a mounted volume) |
-| `DATABASE_URL` | — | Full DB URL — set to switch from SQLite to PostgreSQL |
+## Repository Map
 
----
-
-## 🗂️ Project Structure · 工程结构
-
-```
+```text
 FinancialSystem/
-├─ backend/                 FastAPI backend
-│  ├─ main.py               Entry: DB init, routers, static frontend hosting
-│  ├─ models.py             Tables + schemas + market-value / P&L helpers
-│  ├─ database.py           Engine, init_db, auto-migration
-│  ├─ position.py           ★ Transaction replay → derived holding state
-│  ├─ price_provider.py     Quotes (akshare / CoinGecko)
-│  ├─ fx_provider.py        FX rates (open.er-api.com, BOC fallback)
-│  ├─ auth.py               JWT token creation / verification
-│  ├─ config.py             Settings from .env
-│  ├─ manage.py             CLI helpers (reset-password, list-users)
-│  └─ routers/
-│     ├─ auth.py            /api/auth   register · login · change-password
-│     ├─ platforms.py       /api/platforms   CRUD
-│     ├─ holdings.py        /api/holdings    CRUD + refresh-prices
-│     ├─ transactions.py    /api/transactions  CRUD, auto-sync derived holdings
-│     ├─ summary.py         /api/summary     total, P&L, daily snapshot
-│     ├─ fx.py              /api/fx          FX rate query / refresh
-│     ├─ snapshots.py       /api/snapshots   historical net-worth curve
-│     ├─ notes.py           /api/notes       investment journal CRUD
-│     └─ backup.py          /api/backup      export / import full account JSON
-├─ frontend/                React + Vite SPA
+├─ backend/
+│  ├─ main.py                  FastAPI entrypoint and static frontend hosting
+│  ├─ models.py                SQLModel tables, schemas, and portfolio math
+│  ├─ database.py              Engine, DB init, and lightweight migrations
+│  ├─ position.py              Transaction replay and derived holding state
+│  ├─ price_provider.py        Quote providers
+│  ├─ fx_provider.py           USD/CNY exchange-rate providers
+│  ├─ ai_client.py             GPT, DeepSeek, GLM, and Claude client abstraction
+│  └─ routers/                 API route modules
+├─ frontend/
 │  └─ src/
-│     ├─ App.jsx            Layout, routing, user menu
-│     ├─ constants.js       Enums, labels, privacy fmt helper
-│     ├─ holdings.js        Shared display helpers for derived / manual holdings
-│     ├─ api/index.js       Single API layer (all endpoints)
-│     └─ pages/
-│        ├─ Dashboard.jsx   Total, change, P&L trend chart, allocation pie
-│        ├─ Login.jsx       Login / register
-│        ├─ Platforms.jsx   Platform list + expandable holdings
-│        ├─ PlatformDetail.jsx  Holdings under one platform
-│        ├─ Transactions.jsx   Transaction ledger (drives derived holdings)
-│        └─ Notes.jsx       Investment journal
-├─ Dockerfile              Multi-stage build (Node → Python)
-├─ fly.toml                Fly.io config + persistent volume
-├─ dev.py                  Cross-platform dev launcher (start / stop / setup)
-└─ start.bat / start.sh / stop.bat / stop.sh   Convenience scripts
+│     ├─ App.jsx               Layout and routing
+│     ├─ api/index.js          Axios API layer
+│     └─ pages/                Dashboard, platforms, transactions, research, notes
+├─ Dockerfile                  Multi-stage Docker build
+├─ fly.toml                    Fly.io deployment config
+├─ dev.py                      Cross-platform dev launcher
+└─ dashboard.png               Project screenshot
 ```
 
-> 详细架构与数据流见 [ARCHITECTURE.md](ARCHITECTURE.md)，迭代记录见 [CHANGELOG.md](CHANGELOG.md)。
+## Roadmap
 
----
+- [x] Multi-user authentication
+- [x] Docker and Fly.io deployment
+- [x] Transaction-driven holdings
+- [x] Investment journal
+- [x] Backup and restore
+- [x] Privacy mode and dark theme
+- [x] AI-assisted research workspace
+- [x] Exchange-rate cache refresh
+- [x] Email verification, forgot/reset password, JWT invalidation on password change, in-process rate limiting
+- [x] Optional email registration, security-question password recovery, security question in profile settings
+- [ ] Scheduled quote refresh
+- [ ] PostgreSQL deployment option
+- [ ] Broker API sync for Futu, IBKR, and other providers
+- [ ] PWA/mobile polish
 
-## 📡 Data Sources · 数据源
+## Disclaimer
 
-| Asset type | Source | Notes |
-|---|---|---|
-| A-share / HK / US / on-market funds | akshare (Eastmoney snapshot) | Free, no API key; ~15 min delay |
-| Off-market funds | akshare fund NAV | Latest unit NAV by fund code |
-| Crypto | CoinGecko (free API) | BTC / ETH / … or a CoinGecko id |
-| USD·CNY FX | open.er-api.com | Falls back to Bank of China rate |
+This project is for personal asset tracking and research logging. Market data and AI-generated content may be delayed, incomplete, or incorrect. Nothing in this project is financial advice.
 
-Quotes refresh **on demand** (manual "Update" button) — minimal API calls, full control.
-
----
-
-## 🗺️ Roadmap · 路线图
-
-- [x] Multi-user auth (JWT) · 多用户登录
-- [x] Cloud deployment (Docker + Fly.io) · 容器化上云
-- [x] Transaction-driven holdings (weighted-average cost, realized P&L) · 交易驱动持仓
-- [x] Investment journal · 投资心得备忘
-- [x] Privacy mode & dark theme · 隐私模式与深色主题
-- [x] Backup / restore · 备份与导入
-- [ ] Scheduled auto-refresh (APScheduler) · 定时自动刷新行情
-- [ ] PostgreSQL option for scale · 切换 PostgreSQL
-- [ ] Broker API sync (Futu / IBKR) · 券商 API 直连同步持仓
-- [ ] PWA / mobile polish · 移动端 PWA 优化
-
----
-
-## 📄 License
+## License
 
 Released under the [MIT License](LICENSE).
 
----
-
-<div align="center">
-<sub>Built with FastAPI · React · akshare</sub>
-</div>
