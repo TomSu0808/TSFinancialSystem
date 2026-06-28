@@ -31,12 +31,6 @@ Designed for investors who want a clear personal finance cockpit without handing
 
 Open registration. Multi-user, fully isolated data, HTTPS via Fly.io.
 
-## Screenshots
-
-| Dashboard | Platform Detail |
-| --- | --- |
-| ![Dashboard](01-dashboard.png) | ![Platform Detail](02-platform-detail.png) |
-
 ## Feature Highlights
 
 | Area | What you get |
@@ -209,9 +203,7 @@ FinancialSystem/
 │                                 Research, Notes, Login
 ├─ Dockerfile                     Multi-stage Docker build
 ├─ fly.toml                       Fly.io deployment config
-├─ dev.py                         Cross-platform dev launcher
-├─ 01-dashboard.png               Dashboard screenshot
-└─ 02-platform-detail.png         Platform detail screenshot
+└─ dev.py                         Cross-platform dev launcher
 ```
 
 ## Roadmap

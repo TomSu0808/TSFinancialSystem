@@ -31,12 +31,6 @@ TSFinancialSystem 用来在一个私有 Web 应用里管理股票、基金、债
 
 线上版本支持注册、登录、多用户数据隔离，并通过 Fly.io 提供 HTTPS。
 
-## 截图
-
-| 总览 | 资产明细 |
-| --- | --- |
-| ![总览](01-dashboard.png) | ![资产明细](02-platform-detail.png) |
-
 ## 核心功能
 
 | 模块 | 能做什么 |
@@ -208,9 +202,7 @@ FinancialSystem/
 │     └─ pages/                   总览、资产、资产明细、交易、投研、笔记、登录
 ├─ Dockerfile                     Docker 多阶段构建
 ├─ fly.toml                       Fly.io 部署配置
-├─ dev.py                         跨平台开发启动器
-├─ 01-dashboard.png               总览截图
-└─ 02-platform-detail.png         资产明细截图
+└─ dev.py                         跨平台开发启动器
 ```
 
 ## 路线图
