@@ -63,6 +63,23 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_TLS = os.getenv("SMTP_TLS", "false").lower() == "true"
 
 
+# ── 自动刷新配置 ──────────────────────────────────────────────────────────────
+# AUTO_REFRESH_ENABLED=true 时启动后台定时任务，每日自动刷新行情/汇率/快照。
+AUTO_REFRESH_ENABLED: bool = os.getenv("AUTO_REFRESH_ENABLED", "false").lower() == "true"
+# 每日触发时间，格式 HH:MM，以 AUTO_REFRESH_TIMEZONE 时区计算。
+AUTO_REFRESH_TIME: str = os.getenv("AUTO_REFRESH_TIME", "08:30")
+# 每次任务间隔小时数（默认 24 即每日一次）。
+AUTO_REFRESH_INTERVAL_HOURS: int = int(os.getenv("AUTO_REFRESH_INTERVAL_HOURS", "24"))
+# 时区，任何 zoneinfo 支持的时区字符串均可（如 Asia/Shanghai、UTC）。
+AUTO_REFRESH_TIMEZONE: str = os.getenv("AUTO_REFRESH_TIMEZONE", "Asia/Shanghai")
+# AUTO_REFRESH_ON_STARTUP=true 时应用启动后立即执行一次刷新任务。
+AUTO_REFRESH_ON_STARTUP: bool = os.getenv("AUTO_REFRESH_ON_STARTUP", "false").lower() == "true"
+
+# ── 提醒系统 ──────────────────────────────────────────────────────────────────
+# ALERTS_ENABLED=false 可完全关闭提醒评估逻辑（定时任务和手动评估都不会运行）。
+ALERTS_ENABLED: bool = os.getenv("ALERTS_ENABLED", "true").lower() == "true"
+
+
 def check_production_config() -> None:
     """生产环境启动时校验必要配置，缺失则立即退出。"""
     if not IS_PROD:

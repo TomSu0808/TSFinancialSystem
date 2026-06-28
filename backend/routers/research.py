@@ -1,4 +1,5 @@
 """投研工作台路由：模板列表、AI 投研任务、报告 CRUD（按用户隔离）。"""
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -8,7 +9,7 @@ from sqlmodel import Session, select
 
 from auth import get_current_user
 from database import get_session
-from models import Holding, HoldingStatus, ResearchReport, ResearchReportCreate, ResearchReportUpdate, ResearchRunCreate, User
+from models import Holding, HoldingStatus, Note, ResearchReport, ResearchReportCreate, ResearchReportUpdate, ResearchRunCreate, User
 from models import cost_basis, market_value, profit
 from ai_berkshire_loader import list_skills
 import research_service
@@ -242,6 +243,88 @@ def delete_report(
     session.delete(report)
     session.commit()
     return {"ok": True}
+
+
+def _extract_action_items(report_md: str) -> List[str]:
+    """从报告 Markdown 中提取行动项清单（支持中文"行动项"和英文"Action Items"）。"""
+    heading_re = re.compile(r'^#{1,3}\s+(行动项|Action\s+Items)\s*$', re.IGNORECASE)
+    next_heading_re = re.compile(r'^#{1,3}\s+')
+    list_item_re = re.compile(r'^\s*(?:[-*+]|\d+\.)\s+(.+)')
+
+    in_section = False
+    items: List[str] = []
+    for line in report_md.splitlines():
+        stripped = line.strip()
+        if heading_re.match(stripped):
+            in_section = True
+            continue
+        if in_section:
+            if next_heading_re.match(stripped) and not heading_re.match(stripped):
+                break
+            m = list_item_re.match(line)
+            if m:
+                items.append(m.group(1).strip())
+    return items
+
+
+@router.post("/reports/{report_id}/tracking-notes")
+def generate_tracking_notes(
+    report_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """从 AI 报告的「行动项」章节生成跟踪事项（Note）。重复调用返回已有记录。"""
+    report = _owned(session, report_id, user)
+    if not report.report_md:
+        raise HTTPException(400, "报告尚未生成，无法提取行动项")
+
+    # 防止重复创建：已存在则直接返回
+    existing = session.exec(
+        select(Note).where(
+            Note.user_id == user.id,
+            Note.source_report_id == report_id,
+            Note.note_type == "action",
+        )
+    ).all()
+    if existing:
+        return {"reused": True, "created": False, "notes": [n.model_dump() for n in existing]}
+
+    items = _extract_action_items(report.report_md)
+    if not items:
+        raise HTTPException(400, "报告中未找到「行动项」或「Action Items」章节，无法提取跟踪事项")
+
+    # 确定 symbol
+    symbol = report.symbol
+    if not symbol and report.related_holding_id:
+        h = session.get(Holding, report.related_holding_id)
+        if h and h.user_id == user.id and h.symbol:
+            symbol = h.symbol
+
+    report_date = (report.created_at or datetime.utcnow()).strftime("%Y-%m-%d")
+    source_label = report.title or report.target_name or f"报告#{report_id}"
+
+    notes: List[Note] = []
+    for item in items:
+        title = item[:40] + ("…" if len(item) > 40 else "")
+        content = f"{item}\n\n---\n来源：{source_label}（{report_date}）"
+        note = Note(
+            user_id=user.id,
+            title=title,
+            content=content,
+            note_type="action",
+            status="active",
+            source_report_id=report_id,
+            related_holding_id=report.related_holding_id,
+            symbol=symbol,
+        )
+        session.add(note)
+        notes.append(note)
+
+    session.commit()
+    for n in notes:
+        session.refresh(n)
+
+    return {"reused": False, "created": True, "notes": [n.model_dump() for n in notes]}
 
 
 @router.post("/reports/{report_id}/cancel")

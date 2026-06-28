@@ -11,6 +11,7 @@
 别的操作系统跑不起来）时，会自动为「当前系统」重建，所以在 Mac / Win 之间切换
 不用再手动配环境，也绝不会出现「Mac 的 venv 拿到 Win 上崩溃」的问题。
 """
+import json
 import os
 import platform
 import shutil
@@ -44,6 +45,7 @@ FRONTEND = ROOT / "frontend"
 IS_WIN = os.name == "nt"
 BACKEND_PORT = 8000
 FRONTEND_PORT = 5173
+PID_FILE = ROOT / ".dev-server-pids.json"
 
 
 def platform_tag() -> str:
@@ -168,8 +170,63 @@ def kill_by_port(*ports) -> None:
             f"-Force -ErrorAction SilentlyContinue }}",
         ])
     else:
-        colon = " ".join(f":{p}" for p in ports)
-        subprocess.run(f"lsof -ti {colon} | xargs kill -9", shell=True)
+        for port in ports:
+            result = subprocess.run(
+                ["lsof", "-ti", f"-iTCP:{port}", "-sTCP:LISTEN"],
+                capture_output=True, text=True,
+            )
+            for pid in result.stdout.splitlines():
+                if pid.strip():
+                    _kill_pid(int(pid.strip()))
+
+
+def _pid_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _kill_pid(pid: int) -> bool:
+    if not _pid_running(pid):
+        return False
+    try:
+        if IS_WIN:
+            subprocess.run([
+                "powershell", "-NoProfile", "-Command",
+                f"Stop-Process -Id {pid} -Force -ErrorAction SilentlyContinue",
+            ])
+        else:
+            os.kill(pid, 15)
+            time.sleep(0.4)
+            if _pid_running(pid):
+                os.kill(pid, 9)
+        return True
+    except OSError:
+        return False
+
+
+def write_pid_file(backend, frontend, backend_port: int, frontend_port: int) -> None:
+    payload = {
+        "backend_pid": backend.pid,
+        "frontend_pid": frontend.pid,
+        "backend_port": backend_port,
+        "frontend_port": frontend_port,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    PID_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def read_pid_file() -> dict:
+    if not PID_FILE.exists():
+        return {}
+    try:
+        return json.loads(PID_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 def port_listeners(*ports) -> list[tuple[int, str]]:
@@ -223,8 +280,19 @@ def find_free_port(start_port: int, attempts: int = 20) -> int:
 
 
 def stop() -> None:
-    print("停止后端(8000)与前端(5173)…", flush=True)
-    kill_by_port(BACKEND_PORT, FRONTEND_PORT)
+    info = read_pid_file()
+    backend_port = int(info.get("backend_port") or BACKEND_PORT)
+    frontend_port = int(info.get("frontend_port") or FRONTEND_PORT)
+    print(f"停止后端({backend_port})与前端({frontend_port})…", flush=True)
+
+    for key in ("backend_pid", "frontend_pid"):
+        pid = int(info.get(key) or 0)
+        _kill_pid(pid)
+
+    # 兼容旧版本启动器：没有 pid 文件时仍按端口兜底清理。
+    kill_by_port(backend_port, frontend_port)
+    if PID_FILE.exists():
+        PID_FILE.unlink()
     print("已停止。", flush=True)
 
 
@@ -255,6 +323,7 @@ def start() -> None:
         [npm_cmd(), "run", "dev", "--", "--port", str(frontend_port)],
         cwd=str(FRONTEND), env=frontend_env,
     )
+    write_pid_file(backend, frontend, backend_port, frontend_port)
 
     threading.Timer(
         7.0, lambda: webbrowser.open(f"http://localhost:{frontend_port}")
@@ -270,7 +339,9 @@ def start() -> None:
     finally:
         for p in (backend, frontend):
             p.terminate()
-        kill_by_port(BACKEND_PORT, FRONTEND_PORT)  # 确保 reload 子进程也清掉
+        kill_by_port(backend_port, frontend_port)  # 确保 reload 子进程也清掉
+        if PID_FILE.exists():
+            PID_FILE.unlink()
         print("\n已全部停止。", flush=True)
 
 

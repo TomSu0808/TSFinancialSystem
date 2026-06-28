@@ -98,8 +98,8 @@ export const refreshRate = () => client.post('/fx/refresh').then((r) => r.data)
 export const getSummary = (currency) =>
   client.get('/summary', { params: { currency } }).then((r) => r.data)
 
-// ---- 投资心得 ----
-export const listNotes = () => client.get('/notes').then((r) => r.data)
+// ---- 投资心得 / 决策日志 ----
+export const listNotes = (params) => client.get('/notes', { params }).then((r) => r.data)
 export const createNote = (data) => client.post('/notes', data).then((r) => r.data)
 export const updateNote = (id, data) => client.put(`/notes/${id}`, data).then((r) => r.data)
 export const deleteNote = (id) => client.delete(`/notes/${id}`).then((r) => r.data)
@@ -114,6 +114,16 @@ export const listTransactions = (params) =>
 export const createTransaction = (data) => client.post('/transactions', data).then((r) => r.data)
 export const updateTransaction = (id, data) => client.put(`/transactions/${id}`, data).then((r) => r.data)
 export const deleteTransaction = (id) => client.delete(`/transactions/${id}`).then((r) => r.data)
+export const previewTransactionImport = (file) => {
+  const fd = new FormData()
+  fd.append('file', file)
+  return client.post('/transactions/import/preview', fd).then((r) => r.data)
+}
+export const commitTransactionImport = (file) => {
+  const fd = new FormData()
+  fd.append('file', file)
+  return client.post('/transactions/import/commit', fd).then((r) => r.data)
+}
 
 // ---- 备份 ----
 export const exportBackup = () => client.get('/backup').then((r) => r.data)
@@ -131,6 +141,12 @@ export const deleteResearchReport = (id) => client.delete(`/research/reports/${i
 export const createResearchRun = (data) => client.post('/research/runs', data).then((r) => r.data)
 export const refreshResearchRun = (id) => client.post(`/research/runs/${id}/refresh`).then((r) => r.data)
 export const cancelResearchReport = (id) => client.post(`/research/reports/${id}/cancel`).then((r) => r.data)
+export const generateTrackingNotes = (reportId) =>
+  client.post(`/research/reports/${reportId}/tracking-notes`).then((r) => r.data)
+
+// ---- 持仓研究摘要 ----
+export const getHoldingResearchBrief = (holdingId) =>
+  client.get(`/holdings/${holdingId}/research-brief`).then((r) => r.data)
 
 // ---- AI Key 管理（BYOK）----
 export const listAIKeys = () => client.get('/settings/ai-keys').then((r) => r.data)
@@ -138,5 +154,24 @@ export const saveAIKey = (data) => client.post('/settings/ai-keys', data).then((
 export const updateAIKey = (id, data) => client.put(`/settings/ai-keys/${id}`, data).then((r) => r.data)
 export const deleteAIKey = (id) => client.delete(`/settings/ai-keys/${id}`).then((r) => r.data)
 export const testAIKey = (data) => client.post('/settings/ai-keys/test', data).then((r) => r.data)
+
+// ---- 自动化任务 ----
+export const getAutomationStatus = () => client.get('/automation/status').then((r) => r.data)
+export const runNow = () => client.post('/automation/run-now').then((r) => r.data)
+export const listAutomationRuns = () => client.get('/automation/runs').then((r) => r.data)
+
+// ---- 提醒规则 ----
+export const listAlertRules = () => client.get('/alerts/rules').then((r) => r.data)
+export const createAlertRule = (data) => client.post('/alerts/rules', data).then((r) => r.data)
+export const updateAlertRule = (id, data) => client.put(`/alerts/rules/${id}`, data).then((r) => r.data)
+export const deleteAlertRule = (id) => client.delete(`/alerts/rules/${id}`).then((r) => r.data)
+
+// ---- 提醒事件 ----
+export const listAlertEvents = (params) => client.get('/alerts/events', { params }).then((r) => r.data)
+export const getUnreadCount = () => client.get('/alerts/events/unread-count').then((r) => r.data)
+export const markEventRead = (id) => client.post(`/alerts/events/${id}/read`).then((r) => r.data)
+export const markAllRead = () => client.post('/alerts/events/read-all').then((r) => r.data)
+export const dismissEvent = (id) => client.post(`/alerts/events/${id}/dismiss`).then((r) => r.data)
+export const evaluateAlerts = () => client.post('/alerts/evaluate').then((r) => r.data)
 
 export default client

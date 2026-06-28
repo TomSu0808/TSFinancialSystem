@@ -5,6 +5,7 @@ backend/.venv_broken_mac/
 __pycache__/
 *.pyc
 backend/data.db
+.dev-server-pids.json
 
 # 密钥 / 环境配置（绝不进 Git）
 .env

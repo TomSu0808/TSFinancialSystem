@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
-  Button, Card, Col, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Row,
-  Segmented, Select, Space, Switch, Table, Tag, Tooltip, message,
+  Button, Card, Col, DatePicker, Drawer, Empty, Form, Input, InputNumber, Modal, Popconfirm, Row,
+  Segmented, Select, Space, Spin, Switch, Table, Tag, Tooltip, Typography, message,
 } from 'antd'
-import { PlusOutlined, ReloadOutlined, ArrowLeftOutlined, LinkOutlined, WarningOutlined } from '@ant-design/icons'
+import { BookOutlined, PlusOutlined, ReloadOutlined, ArrowLeftOutlined, LinkOutlined, WarningOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
   listPlatforms, listHoldings, createHolding, updateHolding, deleteHolding, refreshPrices,
-  createTransaction, getRate,
+  createTransaction, getRate, getHoldingResearchBrief,
 } from '../api'
 import {
   CURRENCIES, ASSET_TYPES, MARKETS, MARKET_LABEL, ASSET_TYPE_LABEL, CURRENCY_SYMBOL, fmt,
@@ -17,7 +17,17 @@ import { marketValue, dayChange, costBasis, profitOf, isDerived, isClosed, isAno
 import { useColorScheme } from '../colorScheme.jsx'
 import { useDisplaySettings, convertAmount } from '../displaySettings.jsx'
 
+const NOTE_TYPE_LABEL = {
+  thesis: '买入逻辑', risk: '风险点', review: '复盘',
+  action: '行动项', observation: '观察', general: '笔记',
+}
+const NOTE_TYPE_COLOR = {
+  thesis: 'blue', risk: 'red', review: 'purple',
+  action: 'orange', observation: 'cyan', general: 'default',
+}
+
 export default function PlatformDetail() {
+  const navigate = useNavigate()
   const { upColor, downColor } = useColorScheme()
   const { displayCurrency } = useDisplaySettings()
   const { id } = useParams()
@@ -32,6 +42,12 @@ export default function PlatformDetail() {
   const [editing, setEditing] = useState(null)
   const [mode, setMode] = useState('derived')
   const [form] = Form.useForm()
+
+  // Research brief drawer
+  const [briefOpen, setBriefOpen] = useState(false)
+  const [briefHolding, setBriefHolding] = useState(null)
+  const [briefData, setBriefData] = useState(null)
+  const [briefLoading, setBriefLoading] = useState(false)
 
   const rate = fx?.updated_at ? fx.rate : null
   const conv = (amount, srcCur) => {
@@ -125,6 +141,20 @@ export default function PlatformDetail() {
       load()
     } catch (e) {
       message.error('删除失败：' + e.message)
+    }
+  }
+
+  const openResearchBrief = async (holding) => {
+    setBriefHolding(holding)
+    setBriefData(null)
+    setBriefOpen(true)
+    setBriefLoading(true)
+    try {
+      setBriefData(await getHoldingResearchBrief(holding.id))
+    } catch (e) {
+      message.error('加载研究记录失败：' + e.message)
+    } finally {
+      setBriefLoading(false)
     }
   }
 
@@ -223,7 +253,7 @@ export default function PlatformDetail() {
       },
     },
     {
-      title: '操作', width: 130,
+      title: '操作', width: 180,
       render: (_, r) => (
         <Space>
           <a onClick={() => openEdit(r)}>编辑</a>
@@ -236,6 +266,11 @@ export default function PlatformDetail() {
               <a style={{ color: '#cf1322' }}>删除</a>
             </Popconfirm>
           )}
+          <Tooltip title="查看相关研究记录和报告">
+            <a onClick={() => openResearchBrief(r)} style={{ color: '#1677ff' }}>
+              <BookOutlined />
+            </a>
+          </Tooltip>
         </Space>
       ),
     },
@@ -262,6 +297,88 @@ export default function PlatformDetail() {
     >
       <Table rowKey="id" loading={loading} dataSource={data} columns={columns} pagination={false} scroll={{ x: 860 }}
         rowClassName={(r) => (isClosed(r) ? 'row-closed' : '')} />
+
+      {/* Research Brief Drawer */}
+      <Drawer
+        title={
+          <Space>
+            <BookOutlined />
+            <span>研究记录</span>
+            {briefHolding && (
+              <Tag>{briefHolding.name}{briefHolding.symbol ? ` (${briefHolding.symbol})` : ''}</Tag>
+            )}
+          </Space>
+        }
+        open={briefOpen}
+        onClose={() => setBriefOpen(false)}
+        width={420}
+        footer={
+          briefHolding?.symbol ? (
+            <Space>
+              <Button size="small" onClick={() => navigate(`/notes?symbol=${briefHolding.symbol}`)}>
+                查看全部相关笔记
+              </Button>
+              <Button size="small" onClick={() => navigate('/research')}>
+                去投研工作台
+              </Button>
+            </Space>
+          ) : (
+            <Button size="small" onClick={() => navigate('/research')}>去投研工作台</Button>
+          )
+        }
+      >
+        {briefLoading ? (
+          <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+        ) : briefData ? (
+          <div>
+            {/* Notes grouped by type priority */}
+            {['thesis', 'action', 'risk', 'review', 'observation', 'general'].map((nt) => {
+              const group = briefData.notes.filter((n) => n.note_type === nt)
+              if (!group.length) return null
+              const label = NOTE_TYPE_LABEL[nt] || nt
+              const color = NOTE_TYPE_COLOR[nt] || 'default'
+              return (
+                <div key={nt} style={{ marginBottom: 16 }}>
+                  <Tag color={color} style={{ marginBottom: 8 }}>{label}</Tag>
+                  {group.map((n) => (
+                    <div key={n.id} style={{ background: '#fafafa', borderRadius: 6, padding: '8px 10px', marginBottom: 6, fontSize: 13 }}>
+                      {n.title && <div style={{ fontWeight: 500, marginBottom: 4 }}>{n.title}</div>}
+                      <div style={{ color: '#595959', whiteSpace: 'pre-wrap', fontSize: 12 }}>
+                        {n.content.length > 150 ? n.content.slice(0, 150) + '…' : n.content}
+                      </div>
+                      <div style={{ marginTop: 4, color: '#bbb', fontSize: 11 }}>
+                        {n.status !== 'active' && <Tag style={{ fontSize: 10 }}>{n.status}</Tag>}
+                        {n.updated_at?.slice(0, 10)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            })}
+
+            {/* Reports */}
+            {briefData.reports.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <Tag color="geekblue" style={{ marginBottom: 8 }}>AI 报告</Tag>
+                {briefData.reports.map((r) => (
+                  <div key={r.id} style={{ background: '#f0f5ff', borderRadius: 6, padding: '8px 10px', marginBottom: 6 }}>
+                    <div style={{ fontWeight: 500, fontSize: 13 }}>{r.title || r.target_name}</div>
+                    <Space size={4} style={{ marginTop: 4, flexWrap: 'wrap' }}>
+                      <Tag style={{ fontSize: 10 }}>{r.status === 'completed' ? '已完成' : r.status}</Tag>
+                      <Tag style={{ fontSize: 10 }}>{r.report_language === 'en' ? 'EN' : '中文'}</Tag>
+                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>{r.updated_at?.slice(0, 10)}</Typography.Text>
+                    </Space>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {briefData.notes.length === 0 && briefData.reports.length === 0 && (
+              <Empty description="暂无相关研究记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            )}
+          </div>
+        ) : null}
+      </Drawer>
 
       <Modal
         title={editing ? '编辑资产' : '添加资产'}

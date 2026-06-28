@@ -7,9 +7,11 @@ from sqlmodel import Session, select
 
 from auth import get_current_user
 from database import get_session
+from sqlalchemy import or_
+
 from models import (
     Currency, Holding, HoldingCreate, HoldingSource, HoldingStatus,
-    HoldingUpdate, Platform, User,
+    HoldingUpdate, Note, Platform, ResearchReport, User,
 )
 from price_provider import fetch_quote
 
@@ -97,6 +99,50 @@ def delete_holding(
     session.delete(holding)
     session.commit()
     return {"ok": True}
+
+
+@router.get("/{holding_id}/research-brief")
+def get_research_brief(
+    holding_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """返回持仓关联的研究记录（notes + reports），支持 holding_id 或 symbol 匹配。"""
+    holding = _owned(session, holding_id, user)
+
+    sym = holding.symbol or None
+
+    note_stmt = select(Note).where(Note.user_id == user.id)
+    if sym:
+        note_stmt = note_stmt.where(
+            or_(Note.related_holding_id == holding_id, Note.symbol == sym)
+        )
+    else:
+        note_stmt = note_stmt.where(Note.related_holding_id == holding_id)
+    notes = session.exec(note_stmt.order_by(Note.updated_at.desc()).limit(20)).all()
+
+    report_stmt = select(ResearchReport).where(ResearchReport.user_id == user.id)
+    if sym:
+        report_stmt = report_stmt.where(
+            or_(ResearchReport.related_holding_id == holding_id, ResearchReport.symbol == sym)
+        )
+    else:
+        report_stmt = report_stmt.where(ResearchReport.related_holding_id == holding_id)
+    reports = session.exec(report_stmt.order_by(ResearchReport.updated_at.desc()).limit(10)).all()
+
+    return {
+        "holding": holding.model_dump(),
+        "notes": [n.model_dump() for n in notes],
+        "reports": [
+            {
+                "id": r.id, "title": r.title, "target_name": r.target_name,
+                "symbol": r.symbol, "status": r.status,
+                "template_key": r.template_key, "report_language": r.report_language,
+                "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            }
+            for r in reports
+        ],
+    }
 
 
 @router.post("/refresh-prices")

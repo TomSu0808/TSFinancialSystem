@@ -18,14 +18,17 @@ from database import init_db
 from routers import (
     auth, backup, fx, holdings, notes, platforms, research, snapshots, summary, transactions,
 )
-from routers import ai_keys
+from routers import ai_keys, automation, alerts
+import scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     check_production_config()
     init_db()
+    scheduler.start()
     yield
+    scheduler.stop()
 
 
 app = FastAPI(title="个人资产管理平台 API", version="0.1.0", lifespan=lifespan)
@@ -49,6 +52,8 @@ app.include_router(transactions.router)
 app.include_router(backup.router)
 app.include_router(research.router)
 app.include_router(ai_keys.router)
+app.include_router(automation.router)
+app.include_router(alerts.router)
 
 
 @app.get("/api/health")
