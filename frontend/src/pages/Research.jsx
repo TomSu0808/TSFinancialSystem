@@ -45,8 +45,8 @@ const PROVIDER_OPTIONS = [
 
 const MODEL_OPTIONS = {
   deepseek: [
-    { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro' },
-    { value: 'deepseek-v4-flash', label: 'deepseek-v4-flash' },
+    { value: 'deepseek-chat', label: 'deepseek-chat (V3)' },
+    { value: 'deepseek-reasoner', label: 'deepseek-reasoner (R1)' },
   ],
   gpt: [
     { value: 'gpt-5.5', label: 'gpt-5.5' },

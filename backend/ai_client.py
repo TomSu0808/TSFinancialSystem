@@ -23,7 +23,7 @@ _SYNC_RESPONSES: Dict[str, Dict[str, Any]] = {}
 
 DEFAULT_MODELS = {
     "gpt": os.getenv("OPENAI_MODEL", os.getenv("AI_MODEL_GPT", "gpt-5.5")),
-    "deepseek": os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro"),
+    "deepseek": os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
     "glm": os.getenv("GLM_MODEL", "glm-4.6"),
     "claude": os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5"),
 }
