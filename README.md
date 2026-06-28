@@ -41,12 +41,20 @@ Open registration. Multi-user, fully isolated data, HTTPS via Fly.io.
 
 | Area | What you get |
 | --- | --- |
-| Portfolio dashboard | Total assets, daily change, total return, unrealized / realized P&L, dividend income, and net-worth trend chart |
+| Portfolio dashboard | Total assets, daily change, total return, unrealized / realized P&L, dividend income, net-worth trend chart, and a daily attribution card showing top movers, return breakdown, and data-freshness status |
 | Global display currency | Switch between USD and CNY globally — all pages, P&L, and charts update instantly; choice persists across sessions |
 | Multi-currency assets | CNY, USD, and HKD holdings; FX-converted amounts follow the display currency you set |
 | Platform-based tracking | Group assets by brokerage or account (Futu, IBKR, Tiger, banks, wallets, or custom) |
 | Live market data | A-share, HK, US, fund, crypto, and FX data through free data sources |
 | Transaction-driven holdings | Buy / sell / dividend records auto-update quantity, weighted-average cost, realized P&L, and closed-position status |
+| Transaction search & filter | Filter transaction history by action, currency, platform, keyword (name / symbol / note), and date range |
+| CSV transaction import | Import transactions from a standard CSV template — preview row-by-row validation before committing; buy/sell/dividend rows auto-sync derived holdings |
+| Investment decision log | Upgrade free-form notes to structured decision entries: thesis, risk, review, action items, observation — each linked to a symbol or holding, with status tracking (active / resolved / invalidated / archived) |
+| AI report → tracking notes | Extract action items from any completed AI report into the decision log with one click; auto-links symbol and source report |
+| Holding research brief | Per-holding drawer in the platform detail page shows linked theses, risks, reviews, action items, and AI reports at a glance |
+| Scheduled auto-refresh | Optional daily auto-refresh of prices, FX rate, and snapshots at a configured local time; configurable timezone; one-click manual trigger from the dashboard |
+| In-app alerts | Rule-based alerts for price thresholds, daily change %, position allocation, stale data, and auto-refresh failures; events show on the Dashboard and Alerts page |
+| PostgreSQL support | Deploy with a `DATABASE_URL` pointing to PostgreSQL for production scale; SQLite remains the default |
 | Manual assets | Cash, bonds, private funds, or any asset without a price API — enter market value directly |
 | Investment journal | Write and manage notes for investment decisions, thesis tracking, and reviews |
 | AI research workspace | One-click AI research reports using GPT, DeepSeek, GLM, or Claude; language-locked Chinese/English reports render with full Markdown (GFM tables, code blocks, blockquotes) |
@@ -150,6 +158,38 @@ Copy `backend/.env.example` to `backend/.env` for local development.
 | `GLM_API_KEY` | System-level GLM key |
 | `ANTHROPIC_API_KEY` | System-level Claude key |
 | `FX_REFRESH_INTERVAL_SECONDS` | USD/CNY cache TTL (default 21600 s) |
+| `AUTO_REFRESH_ENABLED` | `false` (default): scheduled auto-refresh is off. `true`: start background daily refresh on startup. |
+| `AUTO_REFRESH_TIME` | Local time for the daily refresh trigger, format `HH:MM` (default `08:30`) |
+| `AUTO_REFRESH_INTERVAL_HOURS` | Hours between auto-refresh runs (default `24`) |
+| `AUTO_REFRESH_TIMEZONE` | Timezone for `AUTO_REFRESH_TIME` — any `zoneinfo` name (default `Asia/Shanghai`) |
+| `AUTO_REFRESH_ON_STARTUP` | `false` (default): wait until next scheduled time. `true`: run once immediately on startup. |
+| `ALERTS_ENABLED` | `true` (default): evaluate alert rules after each refresh. `false`: disable entirely. |
+| `DATABASE_URL` | Full database URL. Omit for SQLite (default). For PostgreSQL: `postgresql+psycopg2://user:password@host:5432/dbname` |
+
+## PostgreSQL Deployment (optional)
+
+SQLite is the default and works well for personal use. For teams or production deployments needing concurrent writes and managed backups, switch to PostgreSQL by setting `DATABASE_URL`.
+
+**Install the driver** (already in `requirements.txt`):
+
+```bash
+pip install psycopg2-binary
+```
+
+**Set the connection string** (Fly.io example):
+
+```bash
+fly secrets set DATABASE_URL="postgresql+psycopg2://user:password@your-pg-host:5432/dbname"
+```
+
+**Local development with PostgreSQL:**
+
+```bash
+export DATABASE_URL="postgresql+psycopg2://user:password@localhost:5432/tsfinancial"
+uvicorn main:app --reload
+```
+
+SQLite (`DATA_DIR`) is ignored when `DATABASE_URL` is set. All tables are created automatically on first startup via `SQLModel.metadata.create_all`.
 
 ## Deploy to Fly.io
 
@@ -228,8 +268,17 @@ FinancialSystem/
 - [x] BYOK — per-user AI API key management with encrypted storage
 - [x] Global display currency (USD/CNY, persisted, synchronized across all pages)
 - [x] Mobile-responsive layout (hamburger nav, adaptive forms, scrollable tables)
-- [ ] Scheduled / automatic quote refresh
-- [ ] PostgreSQL deployment option
+- [x] Transaction search and filter (action, currency, platform, keyword, date range)
+- [x] CSV transaction import with row-by-row preview and validation
+- [x] Dashboard daily attribution (top movers, return breakdown, data-freshness status)
+- [x] Investment decision log (note types, status, symbol / holding links, tags)
+- [x] AI report → tracking notes (extract action items into decision log with one click)
+- [x] Per-holding research brief drawer (theses, risks, action items, AI reports)
+- [x] Structured AI report output (required sections: summary, assumptions, risks, questions, metrics, action items)
+- [x] Scheduled auto-refresh (daily price / FX / snapshot refresh with configurable time and timezone)
+- [x] In-app alert system (price, change %, allocation, stale data, refresh-failure rules)
+- [x] PostgreSQL deployment option (opt-in via `DATABASE_URL`)
+- [ ] Broker CSV format support (Futu, IBKR, Tiger)
 - [ ] Broker API sync (Futu, IBKR, and others)
 
 ## Disclaimer

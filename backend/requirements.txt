@@ -16,3 +16,6 @@ pytest>=8.0
 httpx>=0.27
 openai>=2.0.0
 cryptography>=41.0
+python-multipart
+# PostgreSQL 支持（可选；默认 SQLite，通过 DATABASE_URL 切换到 PG 时需要此驱动）
+psycopg2-binary>=2.9

@@ -105,6 +105,38 @@ def _source_requirements(lang: str) -> str:
     )
 
 
+def _research_loop_requirements(lang: str) -> str:
+    if lang == "en":
+        return (
+            "## Research Loop Output Requirements\n\n"
+            "The report **MUST** include the following sections as Level 2 headings (`##`):\n\n"
+            "1. **## Summary** — A concise 3–5 sentence investment conclusion.\n"
+            "2. **## Core Assumptions** — Key assumptions underlying the investment thesis. "
+            "Unverified items must be explicitly flagged, e.g. *(unverified assumption)* or *(source not confirmed)*.\n"
+            "3. **## Key Risks** — Major risks that could invalidate the thesis or cause losses.\n"
+            "4. **## Questions to Verify** — Specific questions that need further verification before acting.\n"
+            "5. **## Tracking Metrics** — Specific, measurable metrics to monitor going forward "
+            "(e.g., quarterly revenue growth, FCF margin trend, key product milestones).\n"
+            "6. **## Action Items** — Concrete, trackable next steps as a **bullet list**. "
+            "Each item must be specific and actionable "
+            "(e.g., `- Review Q4 2025 earnings release by 2026-03-01`).\n\n"
+            "> The report must include a data snapshot date or data-as-of date. "
+            "Do not present AI-generated content as definitive investment advice."
+        )
+    return (
+        "## 研究闭环输出要求\n\n"
+        "报告**必须**包含以下章节，使用二级 Markdown 标题（`##`）：\n\n"
+        "1. **## 结论摘要** — 3–5 句话的投资核心结论。\n"
+        "2. **## 核心假设** — 支撑投资逻辑的关键假设。不确定信息必须标注，例如「待验证假设」或「来源未能核实」。\n"
+        "3. **## 主要风险** — 可能导致投资逻辑失效或造成损失的关键风险点。\n"
+        "4. **## 待验证问题** — 在采取行动之前需要进一步核实的具体问题清单。\n"
+        "5. **## 跟踪指标** — 需要持续跟踪的具体、可量化指标（如季度营收增速、FCF 利润率趋势、关键产品里程碑）。\n"
+        "6. **## 行动项** — 具体、可跟踪的下一步操作，必须使用**清单列表**格式（每条以 `- ` 开头）。"
+        "每条行动项应具体可执行（如：`- 财报发布后一周内更新估值模型`）。\n\n"
+        "> 报告必须包含数据时点或数据截止日期说明。不要将 AI 输出包装成确定性投资建议。"
+    )
+
+
 def _disclaimer(lang: str) -> str:
     return _DISCLAIMER_EN if lang == "en" else _DISCLAIMER_ZH
 
@@ -173,7 +205,8 @@ def build_prompt(
         "请严格遵守上方 AI Berkshire skill 的研究框架和输出纪律。\n\n"
         f"{_lang_block(report_language)}\n\n"
         f"{_format_requirements(report_language)}\n\n"
-        f"{_source_requirements(report_language)}"
+        f"{_source_requirements(report_language)}\n\n"
+        f"{_research_loop_requirements(report_language)}"
         f"{extra_block}"
         f"{_disclaimer(report_language)}\n\n"
         f"{final_language_guard}\n\n"

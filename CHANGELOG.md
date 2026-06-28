@@ -18,6 +18,89 @@
 
 <!-- 在下面这条横线下方追加新记录，保持最新在最上 -->
 
+## [Phase 3 / v3.1-v3.3] - 2026-06-28
+
+### ✨新增 — v3.1 定时自动刷新
+
+- **AutomationRun 模型**：每次自动/手动全量刷新任务的执行日志（状态、用户数、行情更新数、快照数、错误信息）。
+- **automation_service.py**：纯函数服务层，支持全量刷新（所有用户）和单用户刷新，解耦 HTTP 层，可被调度器和 API 共用。
+- **scheduler.py**：asyncio 轻量调度器，FastAPI lifespan 启动/关闭；支持 `AUTO_REFRESH_TIME`、`AUTO_REFRESH_INTERVAL_HOURS`、`AUTO_REFRESH_TIMEZONE`、`AUTO_REFRESH_ON_STARTUP` 配置。
+- **GET /api/automation/status**：返回配置和最近一次运行结果。
+- **POST /api/automation/run-now**：手动触发单用户刷新，带进程内锁防并发。
+- **GET /api/automation/runs**：最近 20 次任务记录。
+- **Dashboard** 新增「自动刷新状态」卡片：显示启用状态、计划时间、最近运行结果；提供「立即运行」入口。
+
+### ✨新增 — v3.2 站内提醒系统
+
+- **AlertRule 模型**：提醒规则（price_above/below、day_change_pct、allocation_above/below、price_stale、refresh_failed），支持关联持仓或标的代码。
+- **AlertEvent 模型**：触发的提醒事件，严重度分 info/warning/critical，状态 unread/read/dismissed。
+- **alert_service.py**：评估逻辑，支持 8 种提醒类型，当天同规则去重，不重复刷屏。
+- **routers/alerts.py**：规则 CRUD + 事件列表/标记/忽略/全部已读/手动评估，全部用户隔离。
+- **Alerts.jsx**：新提醒页面，两 Tab（事件/规则），规则支持持仓下拉关联，事件支持标记已读/忽略。
+- **导航**：顶部菜单新增「提醒」入口。
+- **Dashboard** 未读提醒摘要卡片：展示最近 3 条未读，链接到提醒页面。
+
+### ✨新增 — v3.3 PostgreSQL 可选支持
+
+- `database.py` 新增 `_table_exists()` / `_column_exists()` 工具函数，兼容 SQLite（PRAGMA）和 PostgreSQL（information_schema）。
+- `_migrate_add_user_id()` 不再只对 SQLite 运行，两种数据库均可执行列补充迁移。
+- `requirements.txt` 新增 `psycopg2-binary>=2.9`（可选，仅 PG 部署时需要）。
+- 新模型（AutomationRun、AlertRule、AlertEvent）由 `SQLModel.metadata.create_all` 自动建表，SQLite 和 PG 均适用。
+
+### ✨新增 — 配置项
+
+- `AUTO_REFRESH_ENABLED`、`AUTO_REFRESH_TIME`、`AUTO_REFRESH_INTERVAL_HOURS`、`AUTO_REFRESH_TIMEZONE`、`AUTO_REFRESH_ON_STARTUP`
+- `ALERTS_ENABLED`
+
+### 📝文档
+
+- README.md / README.zh-CN.md 更新功能表、配置表、路线图、PostgreSQL 部署说明。
+
+### 🐛修复
+
+- alert_service.py 函数返回注解改用 `Optional[T]`，兼容 Python 3.9。
+
+## [新增] - 2026-06-28 研究闭环：AI 报告跟踪 / 决策日志 / 持仓研究摘要
+
+### 类型：✨新增
+
+- **改了什么**：
+  - **AI 报告结构化输出**：`research_prompt_builder.py` 在所有报告 prompt 的 Execution Requirements 区块追加「研究闭环输出要求」，要求 AI 必须输出六个固定章节——结论摘要、核心假设、主要风险、待验证问题、跟踪指标、行动项；行动项必须使用清单列表；报告必须标注数据时点；不确定信息必须标注假设或待验证；不得包装成确定性建议。中英文报告使用对应语言标题结构（英文为 Summary / Core Assumptions / Key Risks / Questions to Verify / Tracking Metrics / Action Items）。
+  - **Note 模型升级为投资决策日志**：Note 新增字段 `related_holding_id`、`source_report_id`、`symbol`、`note_type`（thesis/risk/review/action/observation/general）、`status`（active/resolved/invalidated/archived）、`tags`（逗号分隔）；旧数据自动迁移，默认 note_type=general / status=active；`NoteCreate` / `NoteUpdate` 同步扩展；`_migrate_add_user_id` 补足 note 表新列。
+  - **Notes API 升级**：`GET /api/notes` 支持按 symbol、note_type、status、related_holding_id、source_report_id、keyword（标题+内容模糊）筛选；create/update 新增字段；校验 related_holding_id / source_report_id 属于当前用户，不合法返回 404；用户隔离不变。
+  - **AI 报告生成跟踪事项**：新增 `POST /api/research/reports/{report_id}/tracking-notes`；解析报告 Markdown 中的「行动项」或「Action Items」章节（支持 `#`、`##`、`###` 标题，支持 `-`/`*`/`+`/有序列表行）；每条行动项创建一条 note_type=action 的 Note，携带 source_report_id、related_holding_id、symbol（优先取 report.symbol，否则从 related holding 取）；重复调用返回已有记录（reused=true），不重复创建；无 report_md 或无行动项章节返回 400。
+  - **持仓研究摘要**：新增 `GET /api/holdings/{holding_id}/research-brief`；按 related_holding_id 或 symbol 双向匹配返回当前用户的 notes（最多 20 条，按 updated_at 倒序）和 reports（最多 10 条）；严格用户隔离。
+  - **Notes 页面改造**：Notes.jsx 重写为投资决策日志，新增筛选栏（关键词、symbol、类型、状态）、类型/状态 Tag 展示、tags 展示、来源报告标识；创建/编辑 Modal 增加 note_type、status、symbol、tags 字段；支持读取 URL query（?symbol=AAPL、?source_report_id=12、?note_type=action）并初始化筛选；保留自由文本笔记能力。
+  - **Research 页面**：ReportDetail 在报告完成且有内容时展示「生成跟踪事项」按钮，点击调用 tracking-notes 接口，成功后提示生成数量并附「前往查看」链接（带 source_report_id 过滤跳转 /notes）；重复调用时提示「已存在跟踪事项」。
+  - **PlatformDetail 持仓研究记录**：持仓表格操作列新增书本图标按钮，点击打开 Drawer，展示该持仓相关 notes（按类型分组：买入逻辑、行动项、风险点、复盘、观察、笔记）和 AI 报告列表；Drawer footer 提供「查看全部相关笔记」和「去投研工作台」快捷跳转。
+  - **API 层**：`listNotes(params)` 支持筛选参数；新增 `generateTrackingNotes(reportId)`、`getHoldingResearchBrief(holdingId)`。
+  - **测试**：新增 `backend/tests/test_notes_extended.py`（13 个测试，覆盖新字段 CRUD、五种筛选维度、用户隔离、related_holding 越权拒绝）和 `backend/tests/test_research_tracking.py`（12 个测试，覆盖中英文行动项提取、无 report_md/无行动项的 400、重复调用、symbol 来源逻辑、research brief 基础/symbol 匹配/用户隔离、prompt 六章节验证、清单列表要求）。全套 152 个测试通过。
+- **为什么**：对应 `6_28_advice.md` 第二阶段：让 AI 报告结论沉淀为可跟踪的行动项，让笔记成为关联标的和持仓的投资决策日志，让持仓页能直接看到 thesis / 风险 / 复盘记录，形成「研究→报告→跟踪→复盘」完整闭环。
+- **影响范围**：`backend/models.py`（Note 表+Schema）、`backend/database.py`（migration）、`backend/research_prompt_builder.py`、`backend/routers/notes.py`（重写）、`backend/routers/research.py`（新增接口）、`backend/routers/holdings.py`（新增接口）；新增 `backend/tests/test_notes_extended.py`、`backend/tests/test_research_tracking.py`；`frontend/src/api/index.js`、`frontend/src/pages/Notes.jsx`（重写）、`frontend/src/pages/Research.jsx`、`frontend/src/pages/PlatformDetail.jsx`。
+- **注意事项**：
+  - 无破坏性变更，Note 老数据 note_type=general / status=active，自动兼容。
+  - `source_report_id` 外键指向 `researchreport` 表，仅逻辑关联，删除报告时 notes 的 source_report_id 不级联清空（SQLite 不强制 FK）。
+  - Notes 页面 URL query 驱动筛选：从 Research 或 PlatformDetail 跳转时会自动带上对应参数。
+  - 已验证：后端 pytest 152/152 通过，前端 `npm run build` 通过。
+
+## [新增] - 2026-06-28 交易筛选 / Dashboard 归因 / CSV 导入
+
+### 类型：✨新增
+
+- **改了什么**：
+  - **交易筛选**：`GET /api/transactions` 新增查询参数 `action`、`currency`、`keyword`（模糊匹配 name/symbol/note）、`date_from`、`date_to`；前端交易页筛选栏支持关键词输入、平台/类型/币种下拉、日期范围选择、查询 / 重置按钮，表格上方显示"共 N 条交易"；后端基于 SQLAlchemy `or_` 做模糊搜索，不在前端假筛选。
+  - **Dashboard 归因**：`GET /api/summary` 新增三个字段——`top_movers`（今日涨跌贡献前 5，按 display_change 绝对值排序，仅含 open 持仓且有昨收/现价）、`return_breakdown`（未实现盈亏/已实现盈亏/分红利息/总收益，均按显示货币折算）、`data_freshness`（有价格持仓数、过期/缺失持仓数、stale_items 最多 5 条，仅统计 open 持仓，判定阈值 24 小时）；前端 Dashboard 插入"今日归因 / 数据状态"卡片，展示 Top movers（带涨跌额和涨跌%，颜色跟随 colorScheme）、收益组成 4 个数值、行情状态（过期持仓清单），兼容隐私打码。
+  - **标准 CSV 导入**：新增 `POST /api/transactions/import/preview`（解析校验，不写库，返回逐行结果，最多展示前 100 行）和 `POST /api/transactions/import/commit`（全部有效则导入，有错误则返回 400 带 preview 结构，不导入任何一行）；CSV 字段：`date,action,name,symbol,platform,currency,quantity,price,fee,amount,note`；UTF-8-BOM 兼容；平台名必须精确匹配当前用户已有平台，buy/sell/dividend 同步 derived 持仓；前端交易页新增"导入 CSV"按钮，弹窗含格式说明、模板下载、Dragger 上传、逐行 preview 表格（错误行红色）、仅全部有效时可点确认导入。
+  - **依赖**：后端新增 `python-multipart`（multipart/form-data 上传支持，已写入 requirements.txt）。
+  - **测试**：新增 `backend/tests/test_transactions_filter_import.py`（18 个测试，覆盖筛选、CSV preview/commit、BOM、持仓同步）和 `backend/tests/test_summary_extended.py`（13 个测试，覆盖 top_movers 排序/截断/closed 排除、return_breakdown、data_freshness 时间阈值/截断/closed 排除）。全套 127 个测试通过。
+- **为什么**：对应 `6_28_advice.md` 第一阶段：导入能力降低录入门槛，Dashboard 归因让用户知道"发生了什么"，交易筛选让流水账本从"记录"升级为"可查询的数据库"。
+- **影响范围**：`backend/routers/transactions.py`、`backend/routers/summary.py`、`backend/requirements.txt`；新增 `backend/tests/test_transactions_filter_import.py`、`backend/tests/test_summary_extended.py`；`frontend/src/api/index.js`、`frontend/src/pages/Transactions.jsx`、`frontend/src/pages/Dashboard.jsx`。
+- **注意事项**：
+  - `python-multipart` 新增依赖：若手动管理虚拟环境，需 `pip install python-multipart`；`dev.py start` 会自动安装。
+  - 无数据库结构变更，重启即生效。
+  - CSV 导入仅支持标准模板格式，暂不兼容富途 / IBKR / 老虎等券商导出格式（列入后续路线图）。
+  - 已验证：后端 pytest 127/127 通过，前端 `npm run build` 通过。
+
 ## [新增] - 2026-06-27 认证系统升级：邮箱验证、找回密码、旧 Token 失效与限流
 
 ### 类型：✨新增 / 💥破坏性变更（注册字段）

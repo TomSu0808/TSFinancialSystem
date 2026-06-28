@@ -29,13 +29,44 @@ engine = create_engine(
 )
 
 
-def _migrate_add_user_id() -> None:
-    """给历史已存在的表补 user_id 列（SQLite 的 create_all 不会改已有表）。
+def _table_exists(conn, table: str) -> bool:
+    """判断表是否存在，兼容 SQLite 和 PostgreSQL。"""
+    if IS_SQLITE:
+        rows = conn.execute(text(f'PRAGMA table_info("{table}")')).fetchall()
+        return bool(rows)
+    else:
+        result = conn.execute(
+            text(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'public' AND table_name = :t"
+            ),
+            {"t": table},
+        ).fetchone()
+        return result is not None
 
-    幂等：列已存在则跳过。新增的列允许为空，存量数据 user_id 为 NULL，
-    由「首个注册用户」在注册时认领。
+
+def _column_exists(conn, table: str, col: str) -> bool:
+    """判断列是否存在，兼容 SQLite 和 PostgreSQL。"""
+    if IS_SQLITE:
+        rows = conn.execute(text(f'PRAGMA table_info("{table}")')).fetchall()
+        return any(row[1] == col for row in rows)
+    else:
+        result = conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = :t AND column_name = :c"
+            ),
+            {"t": table, "c": col},
+        ).fetchone()
+        return result is not None
+
+
+def _migrate_add_user_id() -> None:
+    """给历史已存在的表补缺失列（create_all 不会改已有表）。
+
+    幂等：列已存在则跳过。兼容 SQLite 和 PostgreSQL。
     """
-    # 表名 -> 需要补的列（列名: SQL 类型）
+    # 表名 -> 需要补的列（列名: SQL 类型片段）
     wanted = {
         "user": {
             "email_normalized": "VARCHAR",
@@ -56,7 +87,15 @@ def _migrate_add_user_id() -> None:
             "realized_pnl": "FLOAT DEFAULT 0",
             "realized_income": "FLOAT DEFAULT 0",
         },
-        "note": {"user_id": "INTEGER"},
+        "note": {
+            "user_id": "INTEGER",
+            "related_holding_id": "INTEGER",
+            "source_report_id": "INTEGER",
+            "symbol": "VARCHAR",
+            "note_type": "VARCHAR DEFAULT 'general'",
+            "status": "VARCHAR DEFAULT 'active'",
+            "tags": "VARCHAR",
+        },
         "snapshot": {"user_id": "INTEGER", "day": "VARCHAR"},
         "transaction": {"holding_id": "INTEGER"},
         "researchreport": {
@@ -86,14 +125,10 @@ def _migrate_add_user_id() -> None:
     }
     with engine.connect() as conn:
         for table, columns in wanted.items():
-            existing = {
-                row[1]  # PRAGMA table_info 第 2 列是列名
-                for row in conn.execute(text(f'PRAGMA table_info("{table}")')).fetchall()
-            }
-            if not existing:
+            if not _table_exists(conn, table):
                 continue  # 表还不存在（首次启动由 create_all 负责）
             for col, col_type in columns.items():
-                if col not in existing:
+                if not _column_exists(conn, table, col):
                     conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN {col} {col_type}'))
         conn.commit()
 
@@ -104,8 +139,7 @@ def init_db() -> None:
     import models  # noqa: F401
 
     SQLModel.metadata.create_all(engine)
-    if IS_SQLITE:  # PRAGMA / ALTER 写法是 SQLite 专属
-        _migrate_add_user_id()
+    _migrate_add_user_id()  # 兼容 SQLite 和 PostgreSQL
 
 
 def get_session():

@@ -1,5 +1,5 @@
 """一级界面汇总：总额、今日涨跌、累计盈亏、按币种/平台/类型拆分 + 每日净值快照（按用户隔离）。"""
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict
 
 from fastapi import APIRouter, Depends, Query
@@ -10,6 +10,7 @@ from database import get_session
 from models import (
     Currency,
     Holding,
+    HoldingStatus,
     Platform,
     Snapshot,
     User,
@@ -132,6 +133,61 @@ def get_summary(
     ]
     by_type.sort(key=lambda x: x["display_total"], reverse=True)
 
+    # ── top_movers ────────────────────────────────────────────────────────────
+    open_holdings = [h for h in holdings if h.status == HoldingStatus.open]
+    movers = []
+    for h in open_holdings:
+        dc = day_change(h)
+        if dc == 0.0 or h.prev_close is None or h.current_price is None:
+            continue
+        rate = to_cny.get(h.currency, 1.0)
+        display_change = to_display(dc * rate)
+        display_val = to_display(market_value(h) * rate)
+        change_pct_h = (h.current_price - h.prev_close) / h.prev_close * 100
+        movers.append({
+            "holding_id": h.id,
+            "name": h.name,
+            "symbol": h.symbol,
+            "platform": platforms.get(h.platform_id, f"#{h.platform_id}"),
+            "currency": h.currency.value,
+            "display_change": round(display_change, 2),
+            "display_value": round(display_val, 2),
+            "change_pct": round(change_pct_h, 2),
+        })
+    movers.sort(key=lambda x: abs(x["display_change"]), reverse=True)
+    top_movers = movers[:5]
+
+    # ── return_breakdown ──────────────────────────────────────────────────────
+    return_breakdown = {
+        "unrealized_pnl": round(total_profit, 2),
+        "realized_pnl": round(realized_pnl, 2),
+        "realized_income": round(realized_income, 2),
+        "total_return": round(total_return, 2),
+    }
+
+    # ── data_freshness ────────────────────────────────────────────────────────
+    now = datetime.utcnow()
+    stale_threshold = now - timedelta(hours=24)
+    priced_count = sum(1 for h in open_holdings if h.current_price is not None)
+    stale_open = [
+        h for h in open_holdings
+        if h.price_updated_at is None or h.price_updated_at < stale_threshold
+    ]
+    data_freshness = {
+        "priced_count": priced_count,
+        "stale_count": len(stale_open),
+        "stale_items": [
+            {
+                "name": h.name,
+                "symbol": h.symbol,
+                "platform": platforms.get(h.platform_id, f"#{h.platform_id}"),
+                "currency": h.currency.value,
+                "price_updated_at": h.price_updated_at.isoformat() if h.price_updated_at else None,
+            }
+            for h in stale_open[:5]
+        ],
+    }
+
     return {
         "display_currency": currency.value,
         "total": round(total, 2),
@@ -147,4 +203,7 @@ def get_summary(
         "by_currency": by_currency,
         "by_platform": by_platform,
         "by_type": by_type,
+        "top_movers": top_movers,
+        "return_breakdown": return_breakdown,
+        "data_freshness": data_freshness,
     }

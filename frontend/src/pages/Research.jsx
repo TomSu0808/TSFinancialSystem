@@ -5,16 +5,18 @@ import {
   Switch, Tabs, Tag, Tooltip, Typography,
 } from 'antd'
 import {
-  BookOutlined, BulbOutlined, ClockCircleOutlined,
+  BookOutlined, BulbOutlined, CheckCircleOutlined, ClockCircleOutlined,
   CloseCircleOutlined, DeleteOutlined, ExclamationCircleOutlined,
   FileTextOutlined, LinkOutlined, ReloadOutlined, RobotOutlined, SendOutlined,
 } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { useNavigate } from 'react-router-dom'
 import {
   listResearchTemplates, listHoldings,
   listResearchReports, createResearchRun,
   refreshResearchRun, cancelResearchReport, deleteResearchReport,
+  generateTrackingNotes,
 } from '../api'
 
 const { TextArea } = Input
@@ -202,12 +204,14 @@ function getStepStatus(status) {
 }
 
 export default function Research() {
+  const navigate = useNavigate()
   const [templates, setTemplates] = useState([])
   const [holdings, setHoldings] = useState([])
   const [reports, setReports] = useState([])
   const [activeCategory, setActiveCategory] = useState('全部')
   const [selectedTemplate, setSelectedTemplate] = useState(null)
   const [viewReport, setViewReport] = useState(null)
+  const [generatingTracking, setGeneratingTracking] = useState(false)
 
   const [runForm] = Form.useForm()
   const [launching, setLaunching] = useState(false)
@@ -370,6 +374,39 @@ export default function Research() {
         }
       },
     })
+  }
+
+  const handleGenerateTracking = async (report) => {
+    setGeneratingTracking(true)
+    try {
+      const result = await generateTrackingNotes(report.id)
+      if (result.reused) {
+        message.info({
+          content: (
+            <span>
+              已存在 {result.notes.length} 条跟踪事项，无需重复生成。{' '}
+              <a onClick={() => navigate(`/notes?source_report_id=${report.id}`)}>查看</a>
+            </span>
+          ),
+          duration: 6,
+        })
+      } else {
+        message.success({
+          content: (
+            <span>
+              已生成 {result.notes.length} 条跟踪事项。{' '}
+              <a onClick={() => navigate(`/notes?source_report_id=${report.id}`)}>前往查看</a>
+            </span>
+          ),
+          duration: 6,
+        })
+      }
+    } catch (e) {
+      const detail = e.response?.data?.detail || e.message || ''
+      message.error('生成失败：' + detail)
+    } finally {
+      setGeneratingTracking(false)
+    }
   }
 
   const holdingOptions = holdings.map((h) => ({
@@ -590,6 +627,8 @@ export default function Research() {
               onCancel={handleCancel}
               onDelete={handleDelete}
               onRetry={() => setViewReport(null)}
+              onGenerateTracking={handleGenerateTracking}
+              generatingTracking={generatingTracking}
             />
           ) : (
             <ReportList
@@ -671,7 +710,7 @@ function ReportList({ reports, onSelect, onRefresh, onDelete }) {
   )
 }
 
-function ReportDetail({ report, onBack, onRefresh, onCancel, onDelete, onRetry }) {
+function ReportDetail({ report, onBack, onRefresh, onCancel, onDelete, onRetry, onGenerateTracking, generatingTracking }) {
   const st = STATUS_CONFIG[report.status] || STATUS_CONFIG.draft
   const isActive = report.status === 'running' || report.status === 'queued'
   const showSteps = ['queued', 'running', 'completed', 'failed'].includes(report.status)
@@ -790,6 +829,23 @@ function ReportDetail({ report, onBack, onRefresh, onCancel, onDelete, onRetry }
       {report.report_md && (
         <Alert type="info" style={{ marginBottom: 10, fontSize: 11 }}
           message={disclaimer} />
+      )}
+
+      {/* Tracking notes */}
+      {report.status === 'completed' && report.report_md && (
+        <div style={{ marginBottom: 10 }}>
+          <Button
+            icon={<CheckCircleOutlined />}
+            size="small"
+            loading={generatingTracking}
+            onClick={() => onGenerateTracking(report)}
+          >
+            生成跟踪事项
+          </Button>
+          <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>
+            提取报告「行动项」章节，保存为决策日志
+          </Text>
+        </div>
       )}
 
       {/* Attribution */}

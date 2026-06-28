@@ -41,12 +41,20 @@ TSFinancialSystem 用来在一个私有 Web 应用里管理股票、基金、债
 
 | 模块 | 能做什么 |
 | --- | --- |
-| 资产总览 | 查看总资产、今日涨跌、总收益、未实现 / 已实现盈亏、分红收益和净值走势 |
+| 资产总览 | 查看总资产、今日涨跌、总收益、未实现 / 已实现盈亏、分红收益和净值走势；「今日归因 / 数据状态」卡片展示涨跌贡献前 5、收益组成拆分和行情刷新状态 |
 | 全局显示货币 | 在 USD / CNY 间全局切换，所有页面、盈亏和图表同步更新，并在重新登录后保持设置 |
 | 多币种资产 | 支持 CNY、USD、HKD 持仓；金额会按当前显示货币和汇率换算 |
 | 账户管理 | 按券商、银行、钱包或自定义账户分组，例如富途、盈透、老虎、银行卡、加密钱包 |
 | 行情与汇率 | 支持 A 股、港股、美股、基金、加密货币和 USD/CNY 汇率刷新 |
 | 交易驱动持仓 | 买入 / 卖出 / 分红流水自动更新数量、移动加权成本、已实现盈亏和清仓状态 |
+| 交易搜索与筛选 | 按类型、币种、平台、关键词（名称 / 代码 / 备注）和日期范围过滤交易流水 |
+| CSV 批量导入 | 使用标准模板 CSV 批量导入交易，导入前逐行预览校验结果，buy/sell/dividend 自动同步 derived 持仓 |
+| 投资决策日志 | 笔记升级为结构化决策记录：买入逻辑、风险点、复盘、行动项、观察，可关联标的或持仓，支持状态跟踪（跟踪中 / 已解决 / 已证伪 / 已归档） |
+| AI 报告生成跟踪事项 | 一键从 AI 报告「行动项」章节提取并保存到决策日志，自动关联标的和来源报告 |
+| 持仓研究摘要 | 持仓详情页新增「研究记录」抽屉，展示该标的的买入逻辑、风险点、行动项和 AI 报告 |
+| 定时自动刷新 | 可配置每日定时刷新行情、汇率和净值快照；支持时区和启动时立即运行；Dashboard 提供「立即运行」入口 |
+| 站内提醒 | 规则化提醒：价格阈值、今日涨跌幅、仓位占比、行情过期、刷新失败；事件展示在 Dashboard 和专属提醒页 |
+| PostgreSQL 可选部署 | 通过 `DATABASE_URL` 切换至 PostgreSQL，适合生产环境和多人使用；默认仍为 SQLite |
 | 手动资产 | 现金、债券、私募、无法自动抓价的资产可以直接手动维护市值 |
 | 投资笔记 | 记录投资决策、复盘、观察清单和研究备忘 |
 | AI 投研工作台 | 使用 GPT、DeepSeek、GLM 或 Claude 生成中文 / 英文投研报告；报告支持 Markdown、表格、代码块和引用渲染 |
@@ -150,6 +158,32 @@ npm run dev
 | `GLM_API_KEY` | 系统全局 GLM Key |
 | `ANTHROPIC_API_KEY` | 系统全局 Claude Key |
 | `FX_REFRESH_INTERVAL_SECONDS` | USD/CNY 汇率缓存时间，默认 21600 秒 |
+| `AUTO_REFRESH_ENABLED` | `false`（默认）：关闭定时刷新。`true`：启动后台每日刷新任务 |
+| `AUTO_REFRESH_TIME` | 每日触发时间，格式 `HH:MM`，默认 `08:30` |
+| `AUTO_REFRESH_INTERVAL_HOURS` | 刷新间隔小时数，默认 `24` |
+| `AUTO_REFRESH_TIMEZONE` | 时区，任意 `zoneinfo` 字符串，默认 `Asia/Shanghai` |
+| `AUTO_REFRESH_ON_STARTUP` | `false`（默认）：等待下次计划时间。`true`：启动后立即执行一次 |
+| `ALERTS_ENABLED` | `true`（默认）：每次刷新后评估提醒规则。`false`：完全关闭 |
+| `DATABASE_URL` | 完整数据库连接串，留空默认 SQLite。PostgreSQL 示例：`postgresql+psycopg2://user:password@host:5432/dbname` |
+
+## PostgreSQL 部署（可选）
+
+默认使用 SQLite，适合个人本地使用。需要生产环境或多人共用时，可通过 `DATABASE_URL` 切换至 PostgreSQL。
+
+**Fly.io 设置示例：**
+
+```bash
+fly secrets set DATABASE_URL="postgresql+psycopg2://user:password@your-pg-host:5432/dbname"
+```
+
+**本地开发使用 PostgreSQL：**
+
+```bash
+export DATABASE_URL="postgresql+psycopg2://user:password@localhost:5432/tsfinancial"
+uvicorn main:app --reload
+```
+
+设置 `DATABASE_URL` 后，`DATA_DIR`（SQLite 路径）将被忽略。所有表格由 `SQLModel.metadata.create_all` 在首次启动时自动创建。
 
 ## 部署到 Fly.io
 
@@ -227,8 +261,17 @@ FinancialSystem/
 - [x] BYOK：用户级 AI API Key 加密管理
 - [x] 全局显示货币（USD/CNY，跨页面同步并持久化）
 - [x] 移动端响应式布局（抽屉导航、自适应表单、可滚动表格）
-- [ ] 定时自动刷新行情
-- [ ] PostgreSQL 部署选项
+- [x] 交易搜索与筛选（类型、币种、平台、关键词、日期范围）
+- [x] CSV 批量导入（含逐行预览校验）
+- [x] Dashboard 今日归因（涨跌贡献、收益组成、行情状态）
+- [x] 投资决策日志（类型、状态、标的关联、tags）
+- [x] AI 报告生成跟踪事项（一键提取行动项到决策日志）
+- [x] 持仓研究摘要抽屉（thesis / 风险 / 行动项 / AI 报告）
+- [x] AI 报告结构化输出（六大必备章节：结论 / 假设 / 风险 / 待验证 / 指标 / 行动项）
+- [x] 定时自动刷新行情/汇率/快照（可配置时间和时区）
+- [x] 站内提醒系统（价格/涨跌幅/仓位/行情过期/刷新失败规则）
+- [x] PostgreSQL 可选部署（通过 DATABASE_URL 切换）
+- [ ] 富途 / IBKR / 老虎等券商 CSV 格式适配
 - [ ] 富途、盈透等券商 API 同步
 
 ## 免责声明

@@ -158,11 +158,19 @@ class Transaction(SQLModel, table=True):
 
 
 class Note(SQLModel, table=True):
-    """投资心得：自由记录的语录 / 笔记备忘。"""
+    """投资心得 / 决策日志：自由记录的笔记，也可关联标的和持仓。"""
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
     title: Optional[str] = None
     content: str = ""
+    # 关联字段
+    related_holding_id: Optional[int] = Field(default=None, foreign_key="holding.id", index=True)
+    source_report_id: Optional[int] = Field(default=None, foreign_key="researchreport.id", index=True)
+    symbol: Optional[str] = Field(default=None, index=True)
+    # 分类字段
+    note_type: str = Field(default="general")  # thesis/risk/review/action/observation/general
+    status: str = Field(default="active")       # active/resolved/invalidated/archived
+    tags: Optional[str] = Field(default=None)   # 逗号分隔
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -311,11 +319,23 @@ class TransactionUpdate(SQLModel):
 class NoteCreate(SQLModel):
     title: Optional[str] = None
     content: str = ""
+    related_holding_id: Optional[int] = None
+    source_report_id: Optional[int] = None
+    symbol: Optional[str] = None
+    note_type: str = "general"
+    status: str = "active"
+    tags: Optional[str] = None
 
 
 class NoteUpdate(SQLModel):
     title: Optional[str] = None
     content: Optional[str] = None
+    related_holding_id: Optional[int] = None
+    source_report_id: Optional[int] = None
+    symbol: Optional[str] = None
+    note_type: Optional[str] = None
+    status: Optional[str] = None
+    tags: Optional[str] = None
 
 
 class ResearchStatus(str, Enum):
@@ -443,6 +463,85 @@ class UserAIKeyTestInput(SQLModel):
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     model: Optional[str] = None
+
+
+# ── 自动化任务记录 ─────────────────────────────────────────────────────────────
+class AutomationRun(SQLModel, table=True):
+    """每次自动/手动全局刷新任务的执行记录。"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    job_name: str = Field(default="daily_refresh")  # daily_refresh / manual
+    triggered_by: str = Field(default="scheduler")  # scheduler / manual
+    started_at: datetime = Field(default_factory=datetime.utcnow)
+    finished_at: Optional[datetime] = None
+    status: str = Field(default="running")  # running / success / partial_failed / failed
+    users_total: int = 0
+    users_succeeded: int = 0
+    holdings_total: int = 0
+    holdings_updated: int = 0
+    fx_updated: bool = False
+    snapshots_saved: int = 0
+    error_message: Optional[str] = None
+
+
+# ── 提醒规则 ───────────────────────────────────────────────────────────────────
+class AlertRule(SQLModel, table=True):
+    """用户配置的提醒规则。"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    name: str = ""
+    # price_above / price_below / day_change_pct_above / day_change_pct_below
+    # allocation_above / allocation_below / price_stale / refresh_failed
+    alert_type: str = ""
+    enabled: bool = True
+    holding_id: Optional[int] = Field(default=None, foreign_key="holding.id", index=True)
+    symbol: Optional[str] = None
+    currency: Optional[str] = None
+    threshold_value: Optional[float] = None   # 价格/涨跌幅/比例阈值
+    stale_hours: Optional[int] = None         # price_stale 专用：超过多少小时算过期
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── 提醒事件 ───────────────────────────────────────────────────────────────────
+class AlertEvent(SQLModel, table=True):
+    """触发的提醒事件（站内通知）。"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    rule_id: Optional[int] = Field(default=None, foreign_key="alertrule.id", index=True)
+    alert_type: str = ""
+    severity: str = Field(default="info")   # info / warning / critical
+    title: str = ""
+    message: str = ""
+    holding_id: Optional[int] = Field(default=None, foreign_key="holding.id", index=True)
+    symbol: Optional[str] = None
+    value: Optional[float] = None            # 触发时的实际值
+    threshold_value: Optional[float] = None
+    status: str = Field(default="unread")   # unread / read / dismissed
+    triggered_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── AlertRule schemas ──────────────────────────────────────────────────────────
+class AlertRuleCreate(SQLModel):
+    name: str
+    alert_type: str
+    enabled: bool = True
+    holding_id: Optional[int] = None
+    symbol: Optional[str] = None
+    currency: Optional[str] = None
+    threshold_value: Optional[float] = None
+    stale_hours: Optional[int] = None
+
+
+class AlertRuleUpdate(SQLModel):
+    name: Optional[str] = None
+    alert_type: Optional[str] = None
+    enabled: Optional[bool] = None
+    holding_id: Optional[int] = None
+    symbol: Optional[str] = None
+    currency: Optional[str] = None
+    threshold_value: Optional[float] = None
+    stale_hours: Optional[int] = None
 
 
 def market_value(h: Holding) -> float:

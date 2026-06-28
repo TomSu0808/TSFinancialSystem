@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
-  Button, Card, Col, Empty, Row, Segmented, Space, Steps, Tag, Tooltip, message,
+  Alert, Button, Card, Col, Divider, Empty, Row, Segmented, Space, Steps, Tag, Tooltip, message,
 } from 'antd'
 import {
   ReloadOutlined, ArrowUpOutlined, ArrowDownOutlined,
   EditOutlined, InfoCircleOutlined, ExclamationCircleOutlined,
-  CheckCircleOutlined, RightOutlined,
+  CheckCircleOutlined, RightOutlined, WarningOutlined, BellOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
-import { getSummary, getSnapshots, refreshPrices, refreshRate } from '../api'
+import { getSummary, getSnapshots, refreshPrices, refreshRate, getAutomationStatus, runNow, listAlertEvents } from '../api'
 import { CURRENCY_SYMBOL, CURRENCY_LABEL, ASSET_TYPE_LABEL, fmt, isMasked } from '../constants'
 import { useColorScheme } from '../colorScheme.jsx'
 import { useDisplaySettings } from '../displaySettings.jsx'
@@ -34,6 +35,9 @@ export default function Dashboard({ autoRefresh = false }) {
   const [snapshots, setSnapshots] = useState([])
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [automationStatus, setAutomationStatus] = useState(null)
+  const [unreadAlerts, setUnreadAlerts] = useState([])
+  const [runningNow, setRunningNow] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -46,6 +50,9 @@ export default function Dashboard({ autoRefresh = false }) {
     } finally {
       setLoading(false)
     }
+    // 异步加载自动化状态和未读提醒（不影响主流程）
+    getAutomationStatus().then(setAutomationStatus).catch(() => {})
+    listAlertEvents({ status: 'unread', limit: 3 }).then(setUnreadAlerts).catch(() => {})
   }, [displayCurrency])
 
   useEffect(() => {
@@ -67,6 +74,25 @@ export default function Dashboard({ autoRefresh = false }) {
       await load()
     } finally {
       setRefreshing(false)
+    }
+  }
+
+  const doRunNow = async () => {
+    setRunningNow(true)
+    try {
+      const run = await runNow()
+      message.success(
+        `自动刷新完成：${run.holdings_updated}/${run.holdings_total} 条行情，快照已保存`
+      )
+      await load()
+    } catch (e) {
+      if (e.response?.status === 409) {
+        message.warning('刷新任务正在执行中，请稍后再试')
+      } else {
+        message.error('执行失败：' + (e.response?.data?.detail || e.message))
+      }
+    } finally {
+      setRunningNow(false)
     }
   }
 
@@ -310,6 +336,183 @@ export default function Dashboard({ autoRefresh = false }) {
                   ? <ExclamationCircleOutlined style={{ color: '#faad14', marginTop: 2, flexShrink: 0 }} />
                   : <CheckCircleOutlined style={{ color: '#52c41a', marginTop: 2, flexShrink: 0 }} />}
                 <span style={{ color: item.warning ? '#595959' : '#595959' }}>{item.text}</span>
+              </div>
+            ))}
+          </Space>
+        </Card>
+      )}
+
+      {/* 今日归因 / 数据状态 */}
+      {summary && total > 0 && (
+        <Card title="今日归因 / 数据状态" loading={loading} size="small">
+          <Row gutter={[24, 16]}>
+            {/* 今日涨跌贡献 */}
+            <Col xs={24} md={12}>
+              <div style={{ fontWeight: 600, marginBottom: 10, fontSize: 13 }}>今日涨跌贡献</div>
+              {summary.top_movers?.length ? (
+                <Space direction="vertical" style={{ display: 'flex' }} size={6}>
+                  {summary.top_movers.map((m) => {
+                    const up = m.display_change >= 0
+                    const color = up ? RED : GREEN
+                    return (
+                      <div key={m.holding_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}>
+                        <Space size={4}>
+                          <span>{m.name || m.symbol || '—'}</span>
+                          {m.symbol && m.name && (
+                            <span style={{ color: '#aaa', fontSize: 11 }}>{m.symbol}</span>
+                          )}
+                          <Tag style={{ fontSize: 11, padding: '0 4px' }}>{m.platform}</Tag>
+                        </Space>
+                        <Space size={6}>
+                          <span style={{ color, fontWeight: 600 }}>
+                            {up ? '+' : ''}{sym}{fmt(Math.abs(m.display_change))}
+                          </span>
+                          <span style={{ color, fontSize: 12 }}>
+                            ({up ? '+' : ''}{m.change_pct?.toFixed(2)}%)
+                          </span>
+                        </Space>
+                      </div>
+                    )
+                  })}
+                </Space>
+              ) : (
+                <div style={{ color: '#aaa', fontSize: 13 }}>
+                  暂无价格变动数据（刷新行情后显示）
+                </div>
+              )}
+            </Col>
+
+            {/* 收益组成 + 行情状态 */}
+            <Col xs={24} md={12}>
+              {/* 收益组成 */}
+              <div style={{ fontWeight: 600, marginBottom: 10, fontSize: 13 }}>收益组成</div>
+              <Row gutter={[8, 8]} style={{ marginBottom: 16 }}>
+                {[
+                  { label: '未实现盈亏', value: summary.return_breakdown?.unrealized_pnl ?? 0 },
+                  { label: '已实现盈亏', value: summary.return_breakdown?.realized_pnl ?? 0 },
+                  { label: '分红/利息', value: summary.return_breakdown?.realized_income ?? 0 },
+                  { label: '总收益', value: summary.return_breakdown?.total_return ?? 0 },
+                ].map(({ label, value }) => (
+                  <Col xs={12} key={label}>
+                    <div style={{ color: '#8c8c8c', fontSize: 12 }}>{label}</div>
+                    <div style={{ color: value >= 0 ? RED : GREEN, fontWeight: 600, fontSize: 13 }}>
+                      {value >= 0 ? '+' : ''}{sym}{fmt(Math.abs(value))}
+                    </div>
+                  </Col>
+                ))}
+              </Row>
+
+              {/* 行情数据状态 */}
+              <Divider style={{ margin: '8px 0' }} />
+              <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>行情状态</div>
+              {(() => {
+                const df = summary.data_freshness
+                if (!df) return null
+                return (
+                  <Space direction="vertical" style={{ display: 'flex' }} size={6}>
+                    <div style={{ fontSize: 13, color: '#555' }}>
+                      已有行情 <b>{df.priced_count}</b> 条
+                      {df.stale_count > 0 && (
+                        <span style={{ color: '#faad14', marginLeft: 8 }}>
+                          <WarningOutlined /> 过期/缺失 {df.stale_count} 条
+                        </span>
+                      )}
+                    </div>
+                    {df.stale_count > 0 && df.stale_items?.length > 0 && (
+                      <div style={{ background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 4, padding: '6px 10px' }}>
+                        <div style={{ fontSize: 12, color: '#875500', marginBottom: 4 }}>行情过期或未获取的持仓：</div>
+                        {df.stale_items.map((item, i) => (
+                          <div key={i} style={{ fontSize: 12, color: '#6b4c00' }}>
+                            {item.name || item.symbol || '—'}
+                            {item.symbol && item.name ? ` (${item.symbol})` : ''}
+                            · {item.platform} · {item.currency}
+                            {item.price_updated_at
+                              ? <span style={{ color: '#aaa' }}> · 最后更新 {item.price_updated_at.slice(0, 10)}</span>
+                              : <span style={{ color: '#aaa' }}> · 未获取</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </Space>
+                )
+              })()}
+            </Col>
+          </Row>
+        </Card>
+      )}
+
+      {/* 自动刷新状态 */}
+      {automationStatus && (
+        <Card
+          size="small"
+          title={
+            <Space size={6}>
+              <ThunderboltOutlined style={{ color: automationStatus.enabled ? '#1677ff' : '#aaa' }} />
+              自动刷新
+              {automationStatus.enabled
+                ? <Tag color="blue">已启用 · {automationStatus.schedule_time}</Tag>
+                : <Tag>未启用</Tag>}
+            </Space>
+          }
+          extra={
+            <Button size="small" loading={runningNow} onClick={doRunNow}>
+              立即运行
+            </Button>
+          }
+        >
+          {automationStatus.last_run ? (
+            <Space size={16} wrap style={{ fontSize: 12, color: '#595959' }}>
+              <span>
+                状态：
+                <Tag color={
+                  automationStatus.last_run.status === 'success' ? 'success'
+                  : automationStatus.last_run.status === 'partial_failed' ? 'warning'
+                  : 'error'
+                }>
+                  {automationStatus.last_run.status === 'success' ? '成功'
+                   : automationStatus.last_run.status === 'partial_failed' ? '部分失败'
+                   : '失败'}
+                </Tag>
+              </span>
+              <span>行情：{automationStatus.last_run.holdings_updated}/{automationStatus.last_run.holdings_total}</span>
+              <span>快照：{automationStatus.last_run.snapshots_saved}</span>
+              {automationStatus.last_run.finished_at && (
+                <span>
+                  完成于 {new Date(automationStatus.last_run.finished_at).toLocaleString('zh-CN', {
+                    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+                  })}
+                </span>
+              )}
+            </Space>
+          ) : (
+            <span style={{ fontSize: 12, color: '#aaa' }}>
+              {automationStatus.enabled ? '尚未执行过自动刷新任务' : '启用自动刷新后，系统将每日定时刷新行情和汇率'}
+            </span>
+          )}
+        </Card>
+      )}
+
+      {/* 提醒摘要 */}
+      {unreadAlerts.length > 0 && (
+        <Card
+          size="small"
+          title={
+            <Space size={6}>
+              <BellOutlined style={{ color: '#faad14' }} />
+              <span>未读提醒</span>
+              <Tag color="orange">{unreadAlerts.length} 条</Tag>
+            </Space>
+          }
+          extra={<Link to="/alerts" style={{ fontSize: 12 }}>查看全部 &rsaquo;</Link>}
+        >
+          <Space direction="vertical" style={{ display: 'flex' }} size={6}>
+            {unreadAlerts.map((ev) => (
+              <div key={ev.id} style={{ display: 'flex', gap: 8, fontSize: 13 }}>
+                <ExclamationCircleOutlined style={{ color: '#faad14', marginTop: 2, flexShrink: 0 }} />
+                <div>
+                  <span style={{ fontWeight: 500 }}>{ev.title}</span>
+                  <span style={{ color: '#8c8c8c', marginLeft: 8 }}>{ev.message}</span>
+                </div>
               </div>
             ))}
           </Space>

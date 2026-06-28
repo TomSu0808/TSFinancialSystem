@@ -8,7 +8,7 @@ import {
   UserOutlined, LogoutOutlined, DownloadOutlined, UploadOutlined,
   EyeOutlined, EyeInvisibleOutlined, BulbOutlined, SyncOutlined,
   FundOutlined, MailOutlined, QuestionCircleOutlined, KeyOutlined, DeleteOutlined,
-  MenuOutlined,
+  MenuOutlined, BellOutlined,
 } from '@ant-design/icons'
 import { Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import Dashboard from './pages/Dashboard.jsx'
@@ -17,6 +17,7 @@ import PlatformDetail from './pages/PlatformDetail.jsx'
 import Notes from './pages/Notes.jsx'
 import Research from './pages/Research.jsx'
 import Transactions from './pages/Transactions.jsx'
+import Alerts from './pages/Alerts.jsx'
 import Login from './pages/Login.jsx'
 import {
   getStoredUser, getToken, logout, exportBackup, importBackup,
@@ -363,7 +364,9 @@ export default function App() {
         ? '/notes'
         : location.pathname.startsWith('/research')
           ? '/research'
-          : '/'
+          : location.pathname.startsWith('/alerts')
+            ? '/alerts'
+            : '/'
 
   const navItems = [
     { key: '/', icon: <DashboardOutlined />, label: <Link to="/">总览</Link> },
@@ -371,6 +374,7 @@ export default function App() {
     { key: '/transactions', icon: <SwapOutlined />, label: <Link to="/transactions">交易</Link> },
     { key: '/research', icon: <FundOutlined />, label: <Link to="/research">投研</Link> },
     { key: '/notes', icon: <ReadOutlined />, label: <Link to="/notes">笔记</Link> },
+    { key: '/alerts', icon: <BellOutlined />, label: <Link to="/alerts">提醒</Link> },
   ]
 
   const userMenu = {
@@ -493,6 +497,7 @@ export default function App() {
                 <Route path="/transactions" element={<Transactions />} />
                 <Route path="/notes" element={<Notes />} />
                 <Route path="/research" element={<Research />} />
+                <Route path="/alerts" element={<Alerts />} />
               </Routes>
             </ColorSchemeContext.Provider>
           </DisplaySettingsContext.Provider>

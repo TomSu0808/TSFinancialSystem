@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import {
   Button, Card, DatePicker, Form, Input, InputNumber, Modal, Popconfirm,
-  Select, Space, Table, Tag, message,
+  Select, Space, Table, Tag, Upload, message,
 } from 'antd'
-import { PlusOutlined } from '@ant-design/icons'
+import { InboxOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
-  listTransactions, createTransaction, updateTransaction, deleteTransaction, listPlatforms,
+  listTransactions, createTransaction, updateTransaction, deleteTransaction,
+  listPlatforms, previewTransactionImport, commitTransactionImport,
 } from '../api'
 import {
   CURRENCIES, TXN_ACTIONS, TXN_ACTION_LABEL, CURRENCY_SYMBOL, fmt,
@@ -17,7 +18,6 @@ const ACTION_COLOR = {
   buy: 'red', sell: 'green', dividend: 'gold', deposit: 'blue', withdraw: 'purple', other: 'default',
 }
 
-// 现金流：手填 amount 优先，否则按 数量×价格(±费) 估算
 const txnAmount = (t) => {
   if (t.amount != null) return t.amount
   if (t.quantity != null && t.price != null) {
@@ -28,6 +28,11 @@ const txnAmount = (t) => {
   return null
 }
 
+const CSV_TEMPLATE = [
+  'date,action,name,symbol,platform,currency,quantity,price,fee,amount,note',
+  '2026-01-01,buy,Apple,AAPL,富途,USD,100,150.00,3.5,,首次买入',
+].join('\n')
+
 export default function Transactions() {
   const location = useLocation()
   const [data, setData] = useState([])
@@ -36,16 +41,31 @@ export default function Transactions() {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form] = Form.useForm()
+  const [filterForm] = Form.useForm()
+
+  // CSV import state
+  const [csvOpen, setCsvOpen] = useState(false)
+  const [csvFile, setCsvFile] = useState(null)
+  const [csvPreview, setCsvPreview] = useState(null)
+  const [csvPreviewing, setCsvPreviewing] = useState(false)
+  const [csvImporting, setCsvImporting] = useState(false)
 
   const platName = useMemo(
     () => Object.fromEntries(platforms.map((p) => [p.id, p.name])),
     [platforms],
   )
 
-  const load = async () => {
+  const load = async (f = {}) => {
     setLoading(true)
+    const params = {}
+    if (f.keyword) params.keyword = f.keyword
+    if (f.platform_id != null) params.platform_id = f.platform_id
+    if (f.action) params.action = f.action
+    if (f.currency) params.currency = f.currency
+    if (f.date_from) params.date_from = f.date_from
+    if (f.date_to) params.date_to = f.date_to
     try {
-      const [txns, plats] = await Promise.all([listTransactions(), listPlatforms()])
+      const [txns, plats] = await Promise.all([listTransactions(params), listPlatforms()])
       setData(txns)
       setPlatforms(plats)
     } catch (e) {
@@ -55,17 +75,32 @@ export default function Transactions() {
     }
   }
 
-  useEffect(() => {
-    load()
-  }, [])
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 从仪表盘"记一笔"快捷入口跳转过来时，自动打开弹窗
   useEffect(() => {
     if (location.state?.openAdd) {
       openAdd()
       window.history.replaceState({}, '')
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const applyFilters = () => {
+    const v = filterForm.getFieldsValue()
+    const dr = v.dateRange
+    load({
+      keyword: v.keyword || '',
+      platform_id: v.platform_id ?? null,
+      action: v.action || '',
+      currency: v.currency || '',
+      date_from: dr?.[0]?.format('YYYY-MM-DD') || '',
+      date_to: dr?.[1]?.format('YYYY-MM-DD') || '',
+    })
+  }
+
+  const resetFilters = () => {
+    filterForm.resetFields()
+    load({})
+  }
 
   const openAdd = () => {
     setEditing(null)
@@ -103,6 +138,76 @@ export default function Transactions() {
       message.error('删除失败：' + e.message)
     }
   }
+
+  // ── CSV import ──────────────────────────────────────────────────────────────
+  const handleCsvPreview = async (file) => {
+    setCsvFile(file)
+    setCsvPreview(null)
+    setCsvPreviewing(true)
+    try {
+      const result = await previewTransactionImport(file)
+      setCsvPreview(result)
+    } catch (e) {
+      message.error('预览失败：' + (e.response?.data?.detail || e.message))
+    } finally {
+      setCsvPreviewing(false)
+    }
+    return false // prevent antd auto-upload
+  }
+
+  const handleCsvCommit = async () => {
+    if (!csvFile) return
+    setCsvImporting(true)
+    try {
+      const result = await commitTransactionImport(csvFile)
+      message.success(`已成功导入 ${result.imported} 条交易`)
+      setCsvOpen(false)
+      setCsvFile(null)
+      setCsvPreview(null)
+      load()
+    } catch (e) {
+      const detail = e.response?.data?.detail
+      if (detail && typeof detail === 'object') {
+        setCsvPreview(detail)
+      }
+      message.error('导入失败：' + (detail?.message || e.message))
+    } finally {
+      setCsvImporting(false)
+    }
+  }
+
+  const downloadTemplate = () => {
+    const blob = new Blob([CSV_TEMPLATE], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'transaction_template.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const previewColumns = [
+    { title: '行', dataIndex: 'row_number', width: 50 },
+    {
+      title: '状态', dataIndex: 'valid', width: 60,
+      render: (v) => <Tag color={v ? 'green' : 'red'}>{v ? '✓' : '✗'}</Tag>,
+    },
+    {
+      title: '内容 / 错误',
+      render: (_, r) => r.valid ? (
+        <Space size={4} wrap>
+          <span style={{ fontSize: 12 }}>{r.data?.date}</span>
+          <Tag style={{ fontSize: 11 }}>{TXN_ACTION_LABEL[r.data?.action] || r.data?.action}</Tag>
+          <span style={{ fontSize: 12 }}>{r.data?.name || r.data?.symbol || '—'}</span>
+          {r.data?.symbol && r.data?.name && (
+            <span style={{ color: '#999', fontSize: 11 }}>{r.data.symbol}</span>
+          )}
+        </Space>
+      ) : (
+        <div style={{ color: '#cf1322', fontSize: 12 }}>{r.errors?.join('；')}</div>
+      ),
+    },
+  ]
 
   const columns = [
     { title: '日期', dataIndex: 'date', width: 110 },
@@ -150,12 +255,49 @@ export default function Transactions() {
   return (
     <Card
       title="交易记录"
-      extra={<Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>记一笔</Button>}
+      extra={
+        <Space>
+          <Button icon={<UploadOutlined />} onClick={() => { setCsvOpen(true); setCsvFile(null); setCsvPreview(null) }}>
+            导入 CSV
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>记一笔</Button>
+        </Space>
+      }
     >
-      <div style={{ marginBottom: 12, color: '#888', fontSize: 13 }}>
-        买入/卖出会自动更新对应持仓（按 平台 + 代码 + 币种 匹配）的数量与移动加权成本；
-        分红计入已实现收益。入金/出金/其它仅作记录。
+      {/* 筛选栏 */}
+      <Form form={filterForm} layout="inline" style={{ marginBottom: 12, rowGap: 8 }}>
+        <Form.Item name="keyword" style={{ marginBottom: 0 }}>
+          <Input placeholder="搜索标的、代码、备注" style={{ width: 180 }} allowClear />
+        </Form.Item>
+        <Form.Item name="platform_id" style={{ marginBottom: 0 }}>
+          <Select
+            allowClear
+            placeholder="平台"
+            style={{ width: 120 }}
+            options={platforms.map((p) => ({ value: p.id, label: p.name }))}
+          />
+        </Form.Item>
+        <Form.Item name="action" style={{ marginBottom: 0 }}>
+          <Select allowClear placeholder="类型" style={{ width: 110 }} options={TXN_ACTIONS} />
+        </Form.Item>
+        <Form.Item name="currency" style={{ marginBottom: 0 }}>
+          <Select allowClear placeholder="币种" style={{ width: 110 }} options={CURRENCIES} />
+        </Form.Item>
+        <Form.Item name="dateRange" style={{ marginBottom: 0 }}>
+          <DatePicker.RangePicker style={{ width: 220 }} />
+        </Form.Item>
+        <Form.Item style={{ marginBottom: 0 }}>
+          <Button type="primary" onClick={applyFilters}>查询</Button>
+        </Form.Item>
+        <Form.Item style={{ marginBottom: 0 }}>
+          <Button onClick={resetFilters}>重置</Button>
+        </Form.Item>
+      </Form>
+
+      <div style={{ marginBottom: 8, color: '#888', fontSize: 13 }}>
+        共 {data.length} 条交易 · 买入/卖出会自动更新对应持仓（按 平台 + 代码 + 币种 匹配）；分红计入已实现收益
       </div>
+
       <Table
         rowKey="id"
         loading={loading}
@@ -166,6 +308,7 @@ export default function Transactions() {
         size="small"
       />
 
+      {/* 记一笔 / 编辑 Modal */}
       <Modal
         title={editing ? '编辑交易' : '记一笔交易'}
         open={open}
@@ -215,6 +358,86 @@ export default function Transactions() {
             <Input placeholder="可选" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* CSV 导入 Modal */}
+      <Modal
+        title="导入 CSV 交易记录"
+        open={csvOpen}
+        onOk={handleCsvCommit}
+        okText="确认导入"
+        okButtonProps={{
+          disabled: !csvPreview || csvPreview.error_rows > 0 || csvPreview.valid_rows === 0,
+          loading: csvImporting,
+        }}
+        onCancel={() => { setCsvOpen(false); setCsvFile(null); setCsvPreview(null) }}
+        destroyOnHidden
+        width={720}
+      >
+        {/* 格式说明 */}
+        <div style={{ background: '#f9f9f9', padding: 12, borderRadius: 6, marginBottom: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>CSV 格式说明</div>
+          <div style={{ fontSize: 12, fontFamily: 'monospace', color: '#444', wordBreak: 'break-all' }}>
+            date, action, name, symbol, platform, currency, quantity, price, fee, amount, note
+          </div>
+          <div style={{ fontSize: 12, color: '#888', marginTop: 6, lineHeight: 1.6 }}>
+            <b>date</b>：YYYY-MM-DD &nbsp;·&nbsp;
+            <b>action</b>：buy / sell / dividend / deposit / withdraw / other &nbsp;·&nbsp;
+            <b>platform</b>：需与账户名称完全匹配，可留空 &nbsp;·&nbsp;
+            <b>currency</b>：CNY / USD / HKD，默认 CNY &nbsp;·&nbsp;
+            数字字段可留空
+          </div>
+          <Button size="small" style={{ marginTop: 8 }} onClick={downloadTemplate}>
+            下载模板
+          </Button>
+        </div>
+
+        {/* 上传区 */}
+        <Upload.Dragger
+          accept=".csv"
+          maxCount={1}
+          beforeUpload={handleCsvPreview}
+          showUploadList={false}
+          style={{ marginBottom: 12 }}
+        >
+          <p style={{ margin: '8px 0 4px' }}>
+            <InboxOutlined style={{ fontSize: 32, color: '#1677ff' }} />
+          </p>
+          <p style={{ margin: '0 0 4px', color: '#333' }}>点击或拖拽 CSV 文件到此处</p>
+          {csvFile && (
+            <p style={{ margin: 0, color: '#1677ff', fontSize: 12 }}>{csvFile.name}</p>
+          )}
+        </Upload.Dragger>
+
+        {/* 预览结果 */}
+        {csvPreviewing && (
+          <div style={{ textAlign: 'center', padding: '16px 0', color: '#888' }}>解析中…</div>
+        )}
+        {csvPreview && !csvPreviewing && (
+          <div>
+            <Space style={{ marginBottom: 8 }} wrap>
+              <span style={{ color: '#555' }}>共 <b>{csvPreview.total_rows}</b> 行</span>
+              <Tag color="green">可导入 {csvPreview.valid_rows} 行</Tag>
+              {csvPreview.error_rows > 0 && (
+                <Tag color="red">错误 {csvPreview.error_rows} 行</Tag>
+              )}
+              {csvPreview.error_rows > 0 && (
+                <span style={{ color: '#cf1322', fontSize: 12 }}>
+                  请修正所有错误后重新上传
+                </span>
+              )}
+            </Space>
+            <Table
+              dataSource={csvPreview.rows}
+              rowKey="row_number"
+              size="small"
+              pagination={{ pageSize: 10, hideOnSinglePage: true }}
+              columns={previewColumns}
+              rowClassName={(r) => (r.valid ? '' : 'ant-table-row-danger')}
+              style={{ maxHeight: 320, overflow: 'auto' }}
+            />
+          </div>
+        )}
       </Modal>
     </Card>
   )
