@@ -75,6 +75,72 @@ TSFinancialSystem 用来在一个私有 Web 应用里管理股票、基金、债
 | 部署 | Docker 多阶段构建、Fly.io、持久化 volume |
 | 数据 | 默认 SQLite，预留 `DATABASE_URL` 方便后续迁移 |
 
+## 系统流程
+
+### 产品主流程
+
+```text
+创建平台 → 录入交易（或 CSV 导入） → 自动生成持仓 → 刷新行情/汇率
+                                                         ↓
+                                               Dashboard 资产总览（CNY/USD 切换）
+                                                         ↓
+                                         AI 投研报告 → 行动项 → 决策日志
+```
+
+### 交易驱动持仓流程
+
+```text
+Transaction (buy/sell/dividend)
+    → _sync_txn_holding (绑定 derived 持仓)
+    → replay_transactions (Date/ID 升序重放)
+    → PositionState (quantity / avg_cost / realized_pnl / realized_income)
+    → recompute_holding (回写 Holding 表)
+```
+
+### 券商导入流程（Phase 1）
+
+```text
+选择券商（富途 / IBKR / 通用） → 上传 CSV → 自动识别字段 → 用户确认映射
+                                                         ↓
+                                          Preview 校验（valid / warning / error / duplicate）
+                                                         ↓
+                                          Commit → 写入交易 → 回放持仓
+                                                         ↓
+                                          对账（券商数量/成本 vs 系统数量/成本对比）
+```
+
+### 现金账本流程
+
+```text
+入金 / 出金 → _update_cash_holding()
+    → 创建或更新 derived cash 持仓（asset_type=cash, source=derived）
+    → manual_value 记录每个 (platform, currency) 的现金余额
+    → 买入 / 卖出第一版不联动现金
+```
+
+### AI 投研闭环流程
+
+```text
+选择 AI 模版 → 指定标的或组合 → [BYOK 用户 Key] → 构建 Prompt（Skill + 持仓上下文）
+                                                         ↓
+                                               AI Provider 生成报告
+                                                         ↓
+                                         提取行动项 → 决策日志 → 跟踪复盘
+```
+
+## 截图
+
+> 截图占位 — 运行项目后访问 <http://localhost:5173> 查看实际界面。
+
+| 页面 | 说明 |
+| --- | --- |
+| Dashboard | 总资产、今日涨跌、收益拆分、资产配置饼图、净值曲线 |
+| 平台管理 | 按券商/银行/钱包分组，展开查看各平台持仓 |
+| 交易流水 | 买入/卖出/分红流水列表，支持搜索筛选和 CSV 批量导入 |
+| AI 投研工作台 | 选择模版、指定标的、生成结构化 Markdown 报告 |
+| 投资决策日志 | 笔记分类（买入逻辑/风险/行动项/观察），关联标的和报告 |
+| 数据状态 | 行情更新时间、汇率状态、手填资产状态、AI 报告时点 |
+
 ## 数据来源
 
 | 数据 | 来源 | 说明 |
@@ -105,6 +171,16 @@ python dev.py start
 ```bash
 python dev.py stop   # 停止开发服务
 ```
+
+**Demo 数据：**
+
+```bash
+cd backend
+python seed_demo.py      # 首次运行创建 demo 用户及多币种示例数据
+python seed_demo.py      # 重复运行不会重复插入（幂等）
+```
+
+Demo 账号：`demo` / `demo123456`，包含富途、盈透、银行等多平台模拟数据。
 
 **手动启动：**
 
@@ -226,6 +302,9 @@ FinancialSystem/
 │  ├─ research_prompt_builder.py  AI 投研 prompt 组装和 Markdown 格式约束
 │  ├─ email_service.py            SMTP 邮件（验证、重置密码）
 │  ├─ rate_limit.py               进程内滑动窗口限流
+│  ├─ import_service.py           导入编排层（preview / commit / 去重）
+│  ├─ reconciliation_service.py   导入后对账服务
+│  ├─ importers/                  券商 CSV 解析器（futu / ibkr / generic）
 │  └─ routers/                    API 路由模块
 ├─ frontend/
 │  └─ src/
@@ -263,8 +342,10 @@ FinancialSystem/
 - [x] 定时自动刷新行情/汇率/快照（可配置时间和时区）
 - [x] 站内提醒系统（价格/涨跌幅/仓位/行情过期/刷新失败规则）
 - [x] PostgreSQL 可选部署（通过 DATABASE_URL 切换）
-- [ ] 富途 / IBKR / 老虎等券商 CSV 格式适配
-- [ ] 富途、盈透等券商 API 同步
+- [x] 券商 CSV 导入（富途 / IBKR / 通用）— preview 校验、字段映射、去重、commit
+- [x] 导入后对账（券商 vs 系统数量/成本对比）
+- [x] 现金账本（入金/出金 → derived cash 持仓 per platform/currency）
+- [ ] 券商 API 同步（富途、IBKR — Phase 1 后延期）
 
 ## 免责声明
 

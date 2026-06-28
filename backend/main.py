@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from config import CORS_ORIGINS, check_production_config
 from database import init_db
 from routers import (
-    auth, backup, fx, holdings, notes, platforms, research, snapshots, summary, transactions,
+    auth, backup, fx, holdings, imports, notes, platforms, research, snapshots, summary, transactions,
 )
 from routers import ai_keys, automation, alerts
 import scheduler
@@ -49,6 +49,7 @@ app.include_router(summary.router)
 app.include_router(notes.router)
 app.include_router(snapshots.router)
 app.include_router(transactions.router)
+app.include_router(imports.router)
 app.include_router(backup.router)
 app.include_router(research.router)
 app.include_router(ai_keys.router)

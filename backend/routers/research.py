@@ -10,7 +10,7 @@ from sqlmodel import Session, select
 from auth import get_current_user
 from database import get_session
 from models import Holding, HoldingStatus, Note, ResearchReport, ResearchReportCreate, ResearchReportUpdate, ResearchRunCreate, User
-from models import cost_basis, market_value, profit
+from models import Currency, cost_basis, market_value, profit
 from ai_berkshire_loader import list_skills
 import research_service
 from ai_client import AIServiceNotConfigured
@@ -43,26 +43,85 @@ def _holding_context(h: Holding) -> str:
     return "\n".join(lines)
 
 
-def _portfolio_context(holdings: List[Holding], total_value_cny: float) -> str:
+HKD_PEG = 7.8
+
+
+def _get_to_cny_rates(session: Session) -> tuple:
+    """返回 (to_cny_dict, usdcny, fx_updated_at)。"""
+    from models import FxRate
+    fx = session.exec(select(FxRate).where(FxRate.pair == "USDCNY")).first()
+    usdcny = fx.rate if fx else 7.2
+    fx_updated_at = fx.updated_at.isoformat() if fx and fx.updated_at else "unknown"
+    to_cny = {
+        Currency.CNY: 1.0,
+        Currency.USD: usdcny,
+        Currency.HKD: usdcny / HKD_PEG,
+    }
+    return to_cny, usdcny, fx_updated_at
+
+
+def _portfolio_context(holdings: List[Holding], session: Session) -> str:
+    """生成 Portfolio Review 持仓上下文（CNY 统一折算口径）。"""
     if not holdings:
         return "\n**（当前无持仓数据）**\n"
-    rows = []
+
+    to_cny, usdcny, fx_updated_at = _get_to_cny_rates(session)
+
+    rows_data = []
+    total_cny = 0.0
     for h in holdings:
-        mv = market_value(h)
+        mv_native = market_value(h)
+        rate = to_cny.get(h.currency, 1.0)
+        mv_cny = mv_native * rate
         pnl = profit(h)
-        pnl_str = f"{pnl:+.2f}" if pnl is not None else "—"
-        weight = (mv / total_value_cny * 100) if total_value_cny else 0
+        pnl_cny = pnl * rate if pnl is not None else None
+        total_cny += mv_cny
+        rows_data.append({
+            "h": h, "mv_native": mv_native, "mv_cny": mv_cny,
+            "pnl": pnl, "pnl_cny": pnl_cny,
+        })
+
+    rows = []
+    for d in rows_data:
+        h = d["h"]
+        mv_native = d["mv_native"]
+        pnl = d["pnl"]
+        w = (d["mv_cny"] / total_cny * 100) if total_cny else 0
+        if h.currency == Currency.CNY:
+            mv_str = f"{mv_native:.0f} CNY"
+        else:
+            mv_str = f"{mv_native:.0f} {h.currency.value}（≈{d['mv_cny']:.0f} CNY）"
+        pnl_str = f"{pnl:+.2f} {h.currency.value}" if pnl is not None else "—"
         rows.append(
             f"| {h.name} | {h.symbol or '—'} | {h.market.value} | {h.currency.value} "
             f"| {h.quantity or '—'} | {h.cost_price or '—'} | {h.current_price or '—'} "
-            f"| {mv:.0f} | {pnl_str} | {weight:.1f}% |"
+            f"| {mv_str} | {pnl_str} | {w:.1f}% |"
         )
+
     header = (
-        "\n## 当前持仓（平台自动填入）\n\n"
-        "| 名称 | 代码 | 市场 | 币种 | 数量 | 成本价 | 现价 | 市值 | 未实现盈亏 | 占比 |\n"
-        "|------|------|------|------|------|-------|------|------|-----------|------|\n"
+        "\n## 当前持仓（平台自动填入，CNY 统一折算口径）\n\n"
+        "| 名称 | 代码 | 市场 | 币种 | 数量 | 成本价 | 现价 | 市值 | 未实现盈亏 | 占比(CNY) |\n"
+        "|------|------|------|------|------|-------|------|------|-----------|----------|\n"
     )
-    return header + "\n".join(rows) + f"\n\n**总市值（本币加总，未折算）：约 {total_value_cny:.0f} CNY 等值**\n"
+
+    fx_info = (
+        f"\n**汇率信息**：USD/CNY = {usdcny:.4f}，HKD/CNY ≈ {usdcny / HKD_PEG:.4f}（联系汇率≈7.8 HKD/USD）\n"
+        f"**汇率更新时间**：{fx_updated_at}\n"
+    )
+
+    disclaimer = (
+        "\n> ⚠️ **数据说明**：以上市值为持仓原币种金额及按 CNY 折算近似值；"
+        "组合占比基于 CNY 折算市值计算；行情非实时数据；汇率非实时更新。"
+        "请勿将 AI 输出视为确定性投资建议。\n"
+    )
+
+    return (
+        header
+        + "\n".join(rows)
+        + f"\n\n**组合总市值（CNY 折算）：约 {total_cny:,.0f} CNY**"
+        + fx_info
+        + disclaimer
+    )
 
 
 # ── 模板列表 ──────────────────────────────────────────────────────
@@ -147,8 +206,7 @@ def generate_prompt(
                 Holding.status != HoldingStatus.closed,
             )
         ).all()
-        total = sum(market_value(h) for h in holdings)
-        portfolio_ctx = _portfolio_context(list(holdings), total)
+        portfolio_ctx = _portfolio_context(list(holdings), session)
     elif req.holding_id is not None:
         h = session.get(Holding, req.holding_id)
         if not h or h.user_id != user.id:
@@ -337,10 +395,26 @@ def cancel_report(
     if report.status not in ("running", "queued"):
         return {"ok": True, "message": "任务已结束，无需取消"}
 
+    # 解析 BYOK 配置用于 cancel
+    from research_service import _resolve_report_ai_key
+    from ai_client import cancel_response, AIServiceNotConfigured
+
+    user_api_key = None
+    provider = report.provider
+    if report.user_ai_key_id is not None:
+        try:
+            user_api_key, provider = _resolve_report_ai_key(session, report)
+        except AIServiceNotConfigured:
+            # Key 不可用但 cancel 仍执行（标记为平台侧取消）
+            pass
+
     cancelled_provider = False
     if report.provider_response_id:
-        from ai_client import cancel_response
-        cancelled_provider = cancel_response(report.provider_response_id)
+        cancelled_provider = cancel_response(
+            report.provider_response_id,
+            api_key=user_api_key,
+            provider=provider,
+        )
 
     report.status = "cancelled"
     report.completed_at = datetime.utcnow()

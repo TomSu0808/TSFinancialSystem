@@ -120,12 +120,18 @@ def test_editing_action_to_deposit_recomputes_holding(client):
     pid = _platform(client)
     base = {"platform_id": pid, "symbol": "AAPL", "currency": "USD"}
     r = client.post("/api/transactions", json={**base, "action": "buy", "date": "2026-01-01", "quantity": 100, "price": 10})
-    # change the buy into a deposit (no longer drives the position)
+    # change the buy into a deposit (no longer drives the stock position; cash holding created)
     client.put(f"/api/transactions/{r.json()['id']}", json={"action": "deposit"})
     derived = [h for h in client.get("/api/holdings?include_closed=true").json() if h["source"] == "derived"]
-    assert len(derived) == 1
-    assert derived[0]["quantity"] == 0.0          # buy no longer counts
-    assert derived[0]["status"] == "closed"
+    # Now includes 1 stock holding (closed) + 1 cash holding
+    stock_holdings = [h for h in derived if h["asset_type"] != "cash"]
+    assert len(stock_holdings) == 1
+    assert stock_holdings[0]["quantity"] == 0.0          # buy no longer counts
+    assert stock_holdings[0]["status"] == "closed"
+    # Cash holding should exist
+    cash = [h for h in derived if h["asset_type"] == "cash"]
+    assert len(cash) == 1
+    assert cash[0]["manual_value"] > 0
 
 
 def test_editing_symbol_rebinds_to_new_holding(client):
@@ -179,3 +185,109 @@ def test_action_change_to_deposit_clears_holding_id(client):
     client.put(f"/api/transactions/{r.json()['id']}", json={"action": "deposit"})
     txn = [t for t in client.get("/api/transactions").json() if t["id"] == r.json()["id"]][0]
     assert txn["holding_id"] is None
+
+
+# ── 超卖禁止测试 ───────────────────────────────────────────────────
+
+def test_sell_exceeding_available_quantity_is_rejected(client):
+    """卖出数量超过持仓应返回 400 错误。"""
+    pid = _platform(client)
+    base = {"platform_id": pid, "symbol": "TSLA", "currency": "USD"}
+    # 先买入 50 股
+    client.post("/api/transactions", json={**base, "action": "buy", "date": "2026-01-01", "quantity": 50, "price": 10})
+    # 尝试卖出 100 股 → 应被拒绝
+    r = client.post("/api/transactions", json={**base, "action": "sell", "date": "2026-02-01", "quantity": 100, "price": 15})
+    assert r.status_code == 400
+    assert "超卖" in str(r.json().get("detail", "")) or "超过" in r.text
+
+
+def test_full_sell_is_allowed(client):
+    """全部清仓应允许（卖出 == 当前持仓数量）。"""
+    pid = _platform(client)
+    base = {"platform_id": pid, "symbol": "AAPL", "currency": "USD"}
+    client.post("/api/transactions", json={**base, "action": "buy", "date": "2026-01-01", "quantity": 100, "price": 10})
+    r = client.post("/api/transactions", json={**base, "action": "sell", "date": "2026-02-01", "quantity": 100, "price": 12})
+    assert r.status_code == 200
+    # 清仓后持仓状态应为 closed
+    h = [h for h in client.get("/api/holdings?include_closed=true").json() if h["source"] == "derived"][0]
+    assert h["status"] == "closed"
+
+
+def test_partial_sell_is_allowed(client):
+    """部分卖出应允许。"""
+    pid = _platform(client)
+    base = {"platform_id": pid, "symbol": "NVDA", "currency": "USD"}
+    client.post("/api/transactions", json={**base, "action": "buy", "date": "2026-01-01", "quantity": 100, "price": 10})
+    r = client.post("/api/transactions", json={**base, "action": "sell", "date": "2026-02-01", "quantity": 30, "price": 12})
+    assert r.status_code == 200
+    h = [h for h in client.get("/api/holdings").json() if h["source"] == "derived"][0]
+    assert h["quantity"] == 70
+
+
+def test_sell_without_holding_is_rejected(client):
+    """没有持仓时卖出应被拒绝。"""
+    pid = _platform(client)
+    r = client.post("/api/transactions", json={
+        "platform_id": pid, "symbol": "MSFT", "currency": "USD",
+        "action": "sell", "date": "2026-01-01", "quantity": 10, "price": 100,
+    })
+    assert r.status_code == 400
+
+
+def test_update_transaction_to_oversell_rejected(client):
+    """修改历史交易导致超卖应被拒绝。"""
+    pid = _platform(client)
+    base = {"platform_id": pid, "symbol": "BABA", "currency": "USD"}
+    client.post("/api/transactions", json={**base, "action": "buy", "date": "2026-01-01", "quantity": 100, "price": 80})
+    sell_r = client.post("/api/transactions", json={**base, "action": "sell", "date": "2026-02-01", "quantity": 50, "price": 90})
+    assert sell_r.status_code == 200
+
+    # 尝试把卖出数量改为 200 → 应被拒绝
+    r = client.put(f"/api/transactions/{sell_r.json()['id']}", json={"quantity": 200})
+    assert r.status_code == 400
+
+
+def test_update_buy_to_sell_causing_oversell_rejected(client):
+    """把买入改为卖出导致超卖应被拒绝。"""
+    pid = _platform(client)
+    base = {"platform_id": pid, "symbol": "PDD", "currency": "USD"}
+    # 只有一笔买入 10 股
+    buy_r = client.post("/api/transactions", json={**base, "action": "buy", "date": "2026-01-01", "quantity": 10, "price": 100})
+    assert buy_r.status_code == 200
+
+    # 再买入 5 股
+    client.post("/api/transactions", json={**base, "action": "buy", "date": "2026-01-02", "quantity": 5, "price": 110})
+
+    # 现在持仓 15 股。把第一笔买入改为卖出 20 股 → 应被拒绝
+    r = client.put(f"/api/transactions/{buy_r.json()['id']}", json={"action": "sell", "quantity": 20, "price": 120})
+    assert r.status_code == 400
+
+
+def test_delete_transaction_then_recompute_still_correct(client):
+    """删除交易后持仓重算仍正确（不是超卖的回归测试）。"""
+    pid = _platform(client)
+    base = {"platform_id": pid, "symbol": "GOOGL", "currency": "USD"}
+    r1 = client.post("/api/transactions", json={**base, "action": "buy", "date": "2026-01-01", "quantity": 100, "price": 10})
+    r2 = client.post("/api/transactions", json={**base, "action": "sell", "date": "2026-02-01", "quantity": 30, "price": 12})
+    assert r2.status_code == 200
+    client.delete(f"/api/transactions/{r2.json()['id']}")
+    h = [h for h in client.get("/api/holdings").json() if h["source"] == "derived"][0]
+    assert h["quantity"] == 100
+    assert h["cost_price"] == 10
+
+
+def test_csv_preview_detects_oversell(client):
+    """CSV 预览应在卖出超过持仓时标记错误。"""
+    pid = _platform(client)
+    # 无任何持仓时，CSV 只有 sell 应立即被标记
+    platform_name = client.get(f"/api/platforms").json()[0]["name"]
+    csv_content = "date,action,name,symbol,platform,currency,quantity,price,fee,amount,note\n"
+    csv_content += f"2026-03-01,sell,Apple,AAPL,{platform_name},USD,100,150,,,"
+    r = client.post("/api/transactions/import/preview",
+                    files={"file": ("t.csv", csv_content, "text/csv")})
+    assert r.status_code == 200
+    preview = r.json()
+    assert preview["error_rows"] >= 1
+    # 错误信息应包含"超卖"
+    errors = [row for row in preview["rows"] if not row["valid"]]
+    assert any("超卖" in str(e) for e in errors[0].get("errors", []))

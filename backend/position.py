@@ -2,14 +2,18 @@
 
 设计：纯逻辑 replay_transactions（无副作用，便于单测）与带 DB 副作用的
 recompute_holding 分离。详见 docs/superpowers/specs/2026-06-15-transaction-driven-holdings-design.md
+
+精度：核心计算使用 Decimal 避免二进制浮点累积误差（如 0.1 + 0.2）。
 """
+from decimal import Decimal
 from typing import Iterable, Optional
 
 from sqlmodel import Session, select
 
+from decimal_utils import d_div, d_mul, d_sub, d_sum, to_d, to_float
 from models import Currency, Holding, HoldingSource, HoldingStatus, Transaction, TxnAction, User
 
-CLOSE_EPS = 1e-9  # 数量小于此阈值视为清仓，避免浮点残留
+CLOSE_EPS_D = Decimal("1e-9")  # 数量小于此阈值视为清仓
 
 
 class PositionState:
@@ -22,25 +26,42 @@ class PositionState:
 
 def replay_transactions(txns: Iterable[Transaction]) -> PositionState:
     """按 (date, id) 升序重放流水，返回派生状态。买/卖驱动数量与成本，
-    分红计入已实现收益，入金/出金/其它跳过。"""
+    分红计入已实现收益，入金/出金/其它跳过。
+
+    内部使用 Decimal 保证精度，对外返回 float（兼容现有接口）。
+    """
     st = PositionState()
+    # 内部 Decimal 状态
+    qty_d = Decimal("0")
+    avg_d = Decimal("0")
+    pnl_d = Decimal("0")
+    inc_d = Decimal("0")
+
     for t in sorted(txns, key=lambda x: (x.date or "", x.id or 0)):
-        q = t.quantity or 0.0
-        price = t.price or 0.0
-        fee = t.fee or 0.0
+        q = to_d(t.quantity)
+        price = to_d(t.price)
+        fee = to_d(t.fee)
+
         if t.action == TxnAction.buy:
-            total_cost = st.quantity * st.avg_cost + q * price + fee
-            st.quantity += q
-            st.avg_cost = total_cost / st.quantity if st.quantity > CLOSE_EPS else 0.0
+            # 移动加权平均：新总成本 = 旧总成本 + 买入量×价 + 费用
+            total_cost = d_sum(d_mul(qty_d, avg_d), d_mul(q, price), fee)
+            qty_d += q
+            avg_d = d_div(total_cost, qty_d) if qty_d > CLOSE_EPS_D else Decimal("0")
         elif t.action == TxnAction.sell:
-            st.realized_pnl += q * price - q * st.avg_cost - fee
-            st.quantity -= q
-            if abs(st.quantity) < CLOSE_EPS:
-                st.quantity = 0.0
-                st.avg_cost = 0.0
+            # 已实现盈亏 = 卖出量×(卖出价 - 均价) - 费用
+            pnl_d += d_sub(d_mul(q, price), d_mul(q, avg_d)) - fee
+            qty_d -= q
+            if abs(qty_d) < CLOSE_EPS_D:
+                qty_d = Decimal("0")
+                avg_d = Decimal("0")
         elif t.action == TxnAction.dividend:
-            st.realized_income += t.amount if t.amount is not None else 0.0
-        # deposit / withdraw / other: 不影响持仓
+            inc_d += to_d(t.amount)
+
+    # 转回 float 保持接口兼容
+    st.quantity = to_float(qty_d, ndigits=10)
+    st.avg_cost = to_float(avg_d, ndigits=10)
+    st.realized_pnl = to_float(pnl_d, ndigits=10)
+    st.realized_income = to_float(inc_d, ndigits=10)
     return st
 
 
@@ -54,11 +75,11 @@ def recompute_holding(session: Session, holding_id: int) -> None:
     ).all()
     st = replay_transactions(txns)
     holding.quantity = st.quantity
-    holding.cost_price = st.avg_cost if st.quantity > CLOSE_EPS else None
+    holding.cost_price = st.avg_cost if abs(st.quantity) > float(CLOSE_EPS_D) else None
     holding.realized_pnl = st.realized_pnl
     holding.realized_income = st.realized_income
     holding.status = (
-        HoldingStatus.closed if abs(st.quantity) < CLOSE_EPS else HoldingStatus.open
+        HoldingStatus.closed if abs(st.quantity) < float(CLOSE_EPS_D) else HoldingStatus.open
     )
     session.add(holding)
     session.commit()

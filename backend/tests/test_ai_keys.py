@@ -287,3 +287,214 @@ def test_backup_does_not_contain_ai_keys(engine_byok, user_byok):
     assert "sk-secret-12345678" not in backup_str
     assert "useraikey" not in backup_str.lower()
     client.app.dependency_overrides.clear()
+
+
+# ── BYOK 后台任务 retrieve / cancel 测试 ─────────────────────────────
+
+def test_create_run_saves_user_ai_key_id(engine_byok, user_byok):
+    """创建 AI 报告任务时保存 user_ai_key_id 和 base_url。"""
+    client = _make_client(engine_byok, user_byok)
+
+    # 保存 BYOK key
+    client.post("/api/settings/ai-keys", json={
+        "provider": "deepseek",
+        "api_key": "sk-bytest-12345678",
+        "base_url": "https://custom.api.example.com",
+        "is_default": True,
+    })
+
+    with patch("ai_client.start_research") as mock_start:
+        mock_start.return_value = "sync-deepseek-123"
+        resp = client.post("/api/research/runs", json={
+            "template_key": "investment-research",
+            "target_name": "TestCo",
+            "ai_provider": "deepseek",
+        })
+        assert resp.status_code == 200
+        report = resp.json()
+        # 验证 user_ai_key_id 和 base_url 已保存
+        assert report.get("user_ai_key_id") is not None
+        assert report.get("base_url") == "https://custom.api.example.com"
+        assert report.get("provider") == "deepseek"
+    client.app.dependency_overrides.clear()
+
+
+def test_refresh_run_uses_byok_key(engine_byok, user_byok):
+    """refresh_run 应使用创建任务时的用户 Key 配置。"""
+    import research_service
+    from models import ResearchReport, UserAIKey
+    from datetime import datetime
+
+    client = _make_client(engine_byok, user_byok)
+
+    # 保存 BYOK key
+    key_resp = client.post("/api/settings/ai-keys", json={
+        "provider": "deepseek",
+        "api_key": "sk-refresh-test-key123456",
+        "is_default": True,
+    })
+    key_id = key_resp.json()["id"]
+
+    # 直接创建一个"运行中"的报告
+    with Session(engine_byok) as s:
+        report = ResearchReport(
+            user_id=user_byok.id,
+            template_key="investment-research",
+            title="刷新测试",
+            target_name="TestCo",
+            status="running",
+            provider="deepseek",
+            model="deepseek-chat",
+            provider_response_id="sync-deepseek-999",
+            user_ai_key_id=key_id,
+            base_url="https://custom.api.example.com",
+            started_at=datetime.utcnow(),
+        )
+        s.add(report)
+        s.commit()
+        s.refresh(report)
+        report_id = report.id
+
+    with patch("ai_client.retrieve_response") as mock_retrieve:
+        mock_retrieve.return_value = MagicMock(
+            status="completed",
+            output_text="# Test\nReport content",
+            sources=[],
+        )
+        resp = client.post(f"/api/research/runs/{report_id}/refresh")
+        assert resp.status_code == 200
+
+        # 验证 retrieve_response 被调用时传入了正确的 api_key
+        call_args = mock_retrieve.call_args
+        assert call_args is not None
+        # retrieve_response(response_id, api_key=..., provider=...)
+        _, kwargs = call_args
+        assert kwargs.get("api_key") == "sk-refresh-test-key123456"
+        assert kwargs.get("provider") == "deepseek"
+    client.app.dependency_overrides.clear()
+
+
+def test_refresh_run_key_deleted_returns_error(engine_byok, user_byok):
+    """Key 被删除后 refresh 应返回明确错误。"""
+    import research_service
+    from models import ResearchReport
+    from datetime import datetime
+
+    # 直接创建一个引用不存在 key_id 的报告
+    with Session(engine_byok) as s:
+        report = ResearchReport(
+            user_id=user_byok.id,
+            template_key="investment-research",
+            title="KeyMissing",
+            target_name="TestCo",
+            status="running",
+            provider="deepseek",
+            model="deepseek-chat",
+            provider_response_id="sync-deepseek-000",
+            user_ai_key_id=99999,  # 不存在的 key
+        )
+        s.add(report)
+        s.commit()
+        s.refresh(report)
+        report_id = report.id
+
+    with Session(engine_byok) as s:
+        report = s.get(ResearchReport, report_id)
+        from ai_client import AIServiceNotConfigured
+        try:
+            research_service.refresh_run(s, report)
+            assert False, "应抛出异常"
+        except AIServiceNotConfigured as e:
+            assert "已被删除" in str(e) or "Key" in str(e)
+
+
+def test_refresh_run_different_user_key_not_leaked(engine_byok):
+    """不应串用其他用户的 Key。"""
+    import research_service
+    from models import ResearchReport, User, UserAIKey
+    from datetime import datetime
+    from crypto_utils import encrypt_secret
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    SQLModel.metadata.create_all(engine)
+
+    with Session(engine) as s:
+        u1 = User(username="byok_u1", password_hash="x"); s.add(u1)
+        u2 = User(username="byok_u2", password_hash="x"); s.add(u2)
+        s.commit(); s.refresh(u1); s.refresh(u2)
+
+        # u1 的 key（使用有效加密）
+        uk = UserAIKey(
+            user_id=u1.id, provider="deepseek",
+            encrypted_api_key=encrypt_secret("sk-user1-key"),
+            key_last4="abcd",
+        )
+        s.add(uk); s.commit(); s.refresh(uk)
+
+        # u2 的报告引用了 u1 的 key_id
+        report = ResearchReport(
+            user_id=u2.id,
+            template_key="investment-research",
+            title="CrossUser",
+            target_name="TestCo",
+            status="running",
+            provider="deepseek",
+            user_ai_key_id=uk.id,  # 属于 u1 的 key！
+            provider_response_id="sync-x",
+        )
+        s.add(report); s.commit(); s.refresh(report)
+
+        from ai_client import AIServiceNotConfigured
+        try:
+            research_service.refresh_run(s, report)
+            assert False, "应抛出异常（Key 不属于同一用户）"
+        except AIServiceNotConfigured as e:
+            assert "不属于" in str(e) or "异常" in str(e)
+
+
+def test_cancel_uses_byok_key(engine_byok, user_byok):
+    """cancel 应使用创建任务时的用户 Key 配置。"""
+    from models import ResearchReport, UserAIKey
+    from datetime import datetime
+
+    client = _make_client(engine_byok, user_byok)
+
+    # 保存 BYOK key
+    key_resp = client.post("/api/settings/ai-keys", json={
+        "provider": "gpt",
+        "api_key": "sk-cancel-test-key123456",
+        "is_default": True,
+    })
+    key_id = key_resp.json()["id"]
+
+    # 创建运行中的报告
+    with Session(engine_byok) as s:
+        report = ResearchReport(
+            user_id=user_byok.id,
+            template_key="investment-research",
+            title="取消测试",
+            target_name="TestCo",
+            status="running",
+            provider="gpt",
+            model="gpt-5.5",
+            provider_response_id="resp-cancel-001",
+            user_ai_key_id=key_id,
+            started_at=datetime.utcnow(),
+        )
+        s.add(report)
+        s.commit()
+        s.refresh(report)
+        report_id = report.id
+
+    with patch("ai_client.cancel_response") as mock_cancel:
+        mock_cancel.return_value = True
+        resp = client.post(f"/api/research/reports/{report_id}/cancel")
+        assert resp.status_code == 200
+        assert resp.json().get("provider_cancelled") is True
+
+        # 验证 cancel_response 被调用时传入了正确的 api_key
+        call_args = mock_cancel.call_args
+        _, kwargs = call_args
+        assert kwargs.get("api_key") == "sk-cancel-test-key123456"
+        assert kwargs.get("provider") == "gpt"
+    client.app.dependency_overrides.clear()

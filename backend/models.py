@@ -373,6 +373,8 @@ class ResearchReport(SQLModel, table=True):
     error_message: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
+    base_url: Optional[str] = None        # BYOK 自定义 base URL
+    user_ai_key_id: Optional[int] = Field(default=None, index=True)  # FK → UserAIKey.id
     provider_response_id: Optional[str] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
@@ -533,6 +535,45 @@ class AlertRuleCreate(SQLModel):
     stale_hours: Optional[int] = None
 
 
+# ── 导入会话 ───────────────────────────────────────────────────────────────────
+class ImportSession(SQLModel, table=True):
+    """一次导入会话（preview → commit 流程）。"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    platform_id: Optional[int] = Field(default=None, index=True)
+    broker_type: str = ""                    # futu / ibkr / generic
+    file_name: Optional[str] = None
+    detected_fields: Optional[str] = None    # JSON: 自动识别的列映射
+    user_mapping: Optional[str] = None       # JSON: 用户修正后的映射
+    rows_json: Optional[str] = None          # JSON: 解析后的所有行
+    summary_json: Optional[str] = None       # JSON: {valid, error, warning, duplicate}
+    status: str = "previewed"                # previewed / committed / failed
+    created_transaction_count: int = 0
+    skipped_duplicate_count: int = 0
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── 对账快照 ───────────────────────────────────────────────────────────────────
+class ReconSnapshot(SQLModel, table=True):
+    """导入后对账结果：一行一条标的对比。"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    import_session_id: Optional[int] = Field(default=None, index=True)
+    platform_id: Optional[int] = Field(default=None, index=True)
+    symbol: str = ""
+    name: str = ""
+    currency: Optional[str] = None
+    broker_quantity: Optional[float] = None
+    system_quantity: Optional[float] = None
+    quantity_diff: Optional[float] = None
+    broker_cost: Optional[float] = None
+    system_cost: Optional[float] = None
+    cost_diff: Optional[float] = None
+    status: str = "matched"                 # matched / warning / error
+    detail_json: Optional[str] = None       # JSON: 额外详情
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class AlertRuleUpdate(SQLModel):
     name: Optional[str] = None
     alert_type: Optional[str] = None
@@ -545,33 +586,38 @@ class AlertRuleUpdate(SQLModel):
 
 
 def market_value(h: Holding) -> float:
-    """统一市值口径：手填金额优先，否则数量×现价。"""
+    """统一市值口径：手填金额优先，否则数量×现价（Decimal 精度）。"""
     if h.manual_value is not None:
-        return h.manual_value
+        return float(h.manual_value)
     if h.quantity is not None and h.current_price is not None:
-        return h.quantity * h.current_price
+        from decimal_utils import d_mul, to_float
+        return to_float(d_mul(h.quantity, h.current_price))
     return 0.0
 
 
 def day_change(h: Holding) -> float:
-    """今日涨跌额（本币）。手填金额或缺昨收时记 0。"""
+    """今日涨跌额（本币）。手填金额或缺昨收时记 0（Decimal 精度）。"""
     if h.manual_value is not None:
         return 0.0
     if h.quantity is not None and h.current_price is not None and h.prev_close is not None:
-        return h.quantity * (h.current_price - h.prev_close)
+        from decimal_utils import d_mul, d_sub, to_float
+        price_diff = d_sub(h.current_price, h.prev_close)
+        return to_float(d_mul(h.quantity, price_diff))
     return 0.0
 
 
 def cost_basis(h: Holding) -> Optional[float]:
-    """成本（本币）：数量×成本价。缺数量或成本价则返回 None（无法计算盈亏）。"""
+    """成本（本币）：数量×成本价（Decimal 精度）。缺数量或成本价则返回 None。"""
     if h.quantity is not None and h.cost_price is not None:
-        return h.quantity * h.cost_price
+        from decimal_utils import d_mul, to_float
+        return to_float(d_mul(h.quantity, h.cost_price))
     return None
 
 
 def profit(h: Holding) -> Optional[float]:
-    """累计盈亏（本币）= 市值 − 成本。成本未知则返回 None。"""
+    """累计盈亏（本币）= 市值 − 成本（Decimal 精度）。成本未知则返回 None。"""
     cb = cost_basis(h)
     if cb is None:
         return None
-    return market_value(h) - cb
+    from decimal_utils import d_sub, to_d, to_float
+    return to_float(d_sub(to_d(market_value(h)), to_d(cb)))

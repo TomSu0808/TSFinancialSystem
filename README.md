@@ -75,6 +75,82 @@ Open registration. Multi-user, fully isolated data, HTTPS via Fly.io.
 | Infrastructure | Docker multi-stage build, Fly.io, persistent volume |
 | Data | SQLite by default; `DATABASE_URL` available for future migration |
 
+## System Flows
+
+### Main Product Flow
+
+```text
+Create Platform → Enter Transactions (or CSV Import) → Auto-generate Holdings → Refresh Prices/FX
+                                                                     ↓
+                                                        Dashboard Overview (CNY/USD toggle)
+                                                                     ↓
+                                                    AI Research Reports → Action Items → Decision Log
+```
+
+### Transaction-Driven Holdings Flow
+
+```text
+Transaction (buy/sell/dividend)
+    → _sync_txn_holding (bind derived holding)
+    → replay_transactions (sorted by date/id)
+    → PositionState (quantity / avg_cost / realized_pnl / realized_income)
+    → recompute_holding (write back to Holding table)
+```
+
+### Broker Import Flow (Phase 1)
+
+```text
+Select Broker (Futu / IBKR / Generic) → Upload CSV → Auto-detect Fields → User Confirm Mapping
+                                                                              ↓
+                                                              Preview (valid / warning / error / duplicate)
+                                                                              ↓
+                                                              Commit → Write Transactions → Replay Holdings
+                                                                              ↓
+                                                              Reconciliation (broker vs system qty/cost diff)
+```
+
+### Cash Ledger Flow
+
+```text
+Deposit / Withdraw → _update_cash_holding()
+    → Create or update derived cash Holding (asset_type=cash, source=derived)
+    → manual_value tracks current balance per (platform, currency)
+    → buy / sell do NOT affect cash (Phase 1 boundary)
+```
+
+### AI Research Loop
+
+```text
+Select Template → Specify Target or Portfolio → [BYOK User Key] → Build Prompt (Skill + Holdings Context)
+                                                                       ↓
+                                                            AI Provider Generates Report
+                                                                       ↓
+                                                    Extract Action Items → Decision Log → Track & Review
+```
+
+## Screenshots
+
+> Placeholder — visit <http://localhost:5173> after launching the project to see the actual UI.
+
+| Page | Description |
+| --- | --- |
+| Dashboard | Total assets, daily P&L, return breakdown, allocation pie chart, NAV curve |
+| Platforms | Grouped by broker/bank/wallet, expand to see per-platform holdings |
+| Transactions | Buy/sell/dividend ledger with search, filter, and CSV batch import |
+| AI Research | Template selection, target input, structured Markdown report generation |
+| Decision Log | Typed notes (thesis/risk/action/observation), linked to symbols and reports |
+| Data Status | Price freshness, FX rate status, manual asset status, AI report timestamps |
+
+## Demo Data
+
+```bash
+cd backend
+python seed_demo.py      # First run: creates demo user with multi-currency sample data
+python seed_demo.py      # Repeat runs are idempotent (no duplicates)
+```
+
+Demo account: `demo` / `demo123456` — includes Futu, IBKR, and bank platforms with mock data.
+
 ## Data Sources
 
 | Data | Source | Notes |
@@ -232,6 +308,9 @@ FinancialSystem/
 │  ├─ research_prompt_builder.py  AI research prompt assembly with Markdown format rules
 │  ├─ email_service.py            SMTP email (verification, password reset)
 │  ├─ rate_limit.py               In-process sliding-window rate limiter
+│  ├─ import_service.py           Import orchestration (preview / commit / dedup)
+│  ├─ reconciliation_service.py   Post-import broker vs system position comparison
+│  ├─ importers/                  Broker CSV parsers (futu / ibkr / generic)
 │  └─ routers/                    API route modules
 ├─ frontend/
 │  └─ src/
@@ -270,8 +349,10 @@ FinancialSystem/
 - [x] Scheduled auto-refresh (daily price / FX / snapshot refresh with configurable time and timezone)
 - [x] In-app alert system (price, change %, allocation, stale data, refresh-failure rules)
 - [x] PostgreSQL deployment option (opt-in via `DATABASE_URL`)
-- [ ] Broker CSV format support (Futu, IBKR, Tiger)
-- [ ] Broker API sync (Futu, IBKR, and others)
+- [x] Broker CSV import (Futu, IBKR, generic) — preview, field mapping, dedup, commit
+- [x] Import reconciliation (broker vs system qty/cost comparison)
+- [x] Cash ledger (deposit/withdraw → derived cash holding per platform/currency)
+- [ ] Broker API sync (Futu, IBKR — deferred to post-Phase-1)
 
 ## Disclaimer
 

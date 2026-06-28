@@ -114,6 +114,7 @@ export const listTransactions = (params) =>
 export const createTransaction = (data) => client.post('/transactions', data).then((r) => r.data)
 export const updateTransaction = (id, data) => client.put(`/transactions/${id}`, data).then((r) => r.data)
 export const deleteTransaction = (id) => client.delete(`/transactions/${id}`).then((r) => r.data)
+// ---- 旧版 CSV 导入（保留兼容）----
 export const previewTransactionImport = (file) => {
   const fd = new FormData()
   fd.append('file', file)
@@ -124,6 +125,30 @@ export const commitTransactionImport = (file) => {
   fd.append('file', file)
   return client.post('/transactions/import/commit', fd).then((r) => r.data)
 }
+
+// ---- 新版导入系统（Phase 1）----
+export const previewImport = (file, { platform_id, broker_type, mapping }) => {
+  const fd = new FormData()
+  fd.append('file', file)
+  if (platform_id != null) fd.append('platform_id', platform_id)
+  fd.append('broker_type', broker_type || 'futu')
+  if (mapping) fd.append('mapping', JSON.stringify(mapping))
+  return client.post('/imports/preview', fd).then((r) => r.data)
+}
+export const commitImport = (importSessionId, { selected_rows, edited_rows }) => {
+  const fd = new FormData()
+  if (selected_rows) fd.append('selected_rows', selected_rows)
+  if (edited_rows) fd.append('edited_rows', JSON.stringify(edited_rows))
+  return client.post(`/imports/${importSessionId}/commit`, fd).then((r) => r.data)
+}
+export const getImportReconciliation = (importSessionId) =>
+  client.get(`/imports/${importSessionId}/reconciliation`).then((r) => r.data)
+export const listImports = () =>
+  client.get('/imports').then((r) => r.data)
+export const getImportDetail = (importSessionId) =>
+  client.get(`/imports/${importSessionId}`).then((r) => r.data)
+export const getDataStatus = () =>
+  client.get('/summary/data-status').then((r) => r.data)
 
 // ---- 备份 ----
 export const exportBackup = () => client.get('/backup').then((r) => r.data)

@@ -89,3 +89,103 @@ def test_recompute_ignores_manual_holding():
     s.refresh(h)
     assert h.quantity == 5
     assert h.cost_price == 3
+
+
+# ── Decimal 精度测试 ──────────────────────────────────────────────────
+
+def test_decimal_0_1_plus_0_2():
+    """验证 Decimal 计算 0.1 + 0.2 的精度（对比 float）。"""
+    from decimal_utils import to_d, to_float, d_sum
+
+    # float 的经典问题
+    assert 0.1 + 0.2 != 0.3  # float: 0.30000000000000004
+
+    # Decimal 精确
+    result = d_sum(0.1, 0.2)
+    assert result == to_d("0.3")
+    assert to_float(result, ndigits=10) == 0.3
+
+
+def test_replay_transactions_decimal_precision():
+    """交易回放使用 Decimal，避免浮点累积误差。"""
+    txns = [
+        _buy("2026-01-01", 0.1, 10.0),
+        _buy("2026-01-02", 0.2, 10.0),
+        _buy("2026-01-03", 0.3, 10.0),
+    ]
+    st = replay_transactions(txns)
+    # 精确结果应为 0.6，不会出现 0.6000000000000001
+    assert st.quantity == 0.6
+    assert st.avg_cost == 10.0
+
+
+def test_fractional_shares_cost_precision():
+    """分批买卖小数量时的成本精度。"""
+    txns = [
+        _buy("2026-01-01", 1.0 / 3.0, 150.0),   # 0.333... 股
+        _buy("2026-01-02", 1.0 / 3.0, 155.0),
+        _buy("2026-01-03", 1.0 / 3.0, 160.0),
+    ]
+    st = replay_transactions(txns)
+    assert abs(st.quantity - 1.0) < 1e-9  # ~1 股
+    assert abs(st.avg_cost - 155.0) < 1e-9  # 平均成本 ~155
+
+
+def test_fee_subtraction_precision():
+    """费用扣减精度（避免 0.05000000000001 之类）。"""
+    txns = [
+        _buy("2026-01-01", 100, 10.0, fee=5.15),
+    ]
+    st = replay_transactions(txns)
+    # 成本 = (100 * 10 + 5.15) / 100 = 10.0515
+    assert abs(st.avg_cost - 10.0515) < 1e-9
+
+
+def test_realized_pnl_fractional():
+    """小额已实现盈亏应精确。"""
+    txns = [
+        _buy("2026-01-01", 10, 100.0),
+        _sell("2026-02-01", 3, 100.5, fee=1.23),
+    ]
+    st = replay_transactions(txns)
+    # realized_pnl = 3*100.5 - 3*100 - 1.23 = 301.5 - 300.0 - 1.23 = 0.27
+    assert abs(st.realized_pnl - 0.27) < 1e-9
+
+
+def test_market_value_decimal():
+    """market_value 使用 Decimal 避免浮点误差。"""
+    from models import market_value
+    from decimal_utils import to_float, d_mul
+
+    h = Holding(quantity=0.1, current_price=0.2)
+    mv = market_value(h)
+    # 0.1 * 0.2 = 0.02（float 可能产生 0.020000000000000004）
+    assert abs(mv - 0.02) < 1e-10
+    assert to_float(d_mul(0.1, 0.2)) == 0.02
+
+
+def test_profit_decimal():
+    """profit 计算使用 Decimal。"""
+    from models import profit
+    h = Holding(
+        quantity=100.0,
+        cost_price=10.0,
+        current_price=10.5,
+    )
+    p = profit(h)
+    # profit = 100 * 10.5 - 100 * 10 = 50
+    assert p is not None
+    assert abs(p - 50.0) < 1e-9
+
+
+def test_day_change_decimal():
+    """day_change 使用 Decimal。"""
+    from models import day_change
+    h = Holding(
+        quantity=100.0,
+        current_price=10.5,
+        prev_close=10.0,
+    )
+    dc = day_change(h)
+    # day_change = 100 * (10.5 - 10.0) = 50
+    assert abs(dc - 50.0) < 1e-9

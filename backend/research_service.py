@@ -11,7 +11,7 @@ from ai_client import AIServiceNotConfigured
 from ai_berkshire_loader import load_skill, get_skill_meta
 from config import ALLOW_SYSTEM_AI_FALLBACK
 from crypto_utils import decrypt_secret
-from models import Holding, HoldingStatus, Platform, ResearchReport, User, UserAIKey, cost_basis, market_value, profit
+from models import Holding, HoldingStatus, Platform, ResearchReport, User, UserAIKey, Currency, cost_basis, market_value, profit
 import research_prompt_builder
 
 _EN_TEMPLATE_TITLES = {
@@ -56,28 +56,101 @@ def _holding_context(h: Holding, session: Session) -> str:
     ])
 
 
-def _portfolio_context(holdings: List[Holding]) -> str:
+# 汇率折算表：HKD 按联系汇率 ~7.8 近似折算为 USD 后再折算 CNY
+HKD_PEG = 7.8
+
+
+def _get_to_cny_rates(session: Session) -> dict:
+    """返回 {Currency: rate_to_cny} 字典，CNY 始终为 1.0。"""
+    from models import FxRate
+    fx = session.exec(select(FxRate).where(FxRate.pair == "USDCNY")).first()
+    usdcny = fx.rate if fx else 7.2
+    fx_updated_at = fx.updated_at.isoformat() if fx and fx.updated_at else "unknown"
+    return {
+        Currency.CNY: 1.0,
+        Currency.USD: usdcny,
+        Currency.HKD: usdcny / HKD_PEG,
+    }, usdcny, fx_updated_at
+
+
+def _portfolio_context(holdings: List[Holding], session: Session) -> str:
+    """生成 Portfolio Review 持仓上下文（CNY 统一折算口径）。
+
+    所有持仓按 CNY 折算后计算总市值和组合权重，并在 prompt 中标注
+    原币种金额、折算汇率和汇率更新时间。
+    """
     if not holdings:
         return "\n**（当前无持仓数据）**\n"
-    total = sum(market_value(h) for h in holdings)
-    rows = []
+
+    to_cny, usdcny, fx_updated_at = _get_to_cny_rates(session)
+
+    # 计算每个持仓的 CNY 折算市值和未实现盈亏
+    rows_data = []
+    total_cny = 0.0
     for h in holdings:
-        mv = market_value(h)
+        mv_native = market_value(h)
+        rate = to_cny.get(h.currency, 1.0)
+        mv_cny = mv_native * rate
         pnl = profit(h)
-        w = (mv / total * 100) if total else 0
+        pnl_cny = pnl * rate if pnl is not None else None
+        total_cny += mv_cny
+        rows_data.append({
+            "h": h,
+            "mv_native": mv_native,
+            "mv_cny": mv_cny,
+            "pnl": pnl,
+            "pnl_cny": pnl_cny,
+            "rate": rate,
+        })
+
+    # 按 CNY 折算市值加权
+    rows = []
+    for d in rows_data:
+        h = d["h"]
+        mv_native = d["mv_native"]
+        pnl = d["pnl"]
+        w = (d["mv_cny"] / total_cny * 100) if total_cny else 0
+        # 标注币种：CNY 只显示原值；非 CNY 额外显示折算值
+        if h.currency == Currency.CNY:
+            mv_str = f"{mv_native:.0f} CNY"
+        else:
+            mv_str = f"{mv_native:.0f} {h.currency.value}（≈{d['mv_cny']:.0f} CNY）"
+        pnl_str = f"{pnl:+.2f} {h.currency.value}" if pnl is not None else "—"
         rows.append(
             f"| {h.name} | {h.symbol or '—'} | {h.market.value} | {h.currency.value} "
-            f"| {h.quantity if h.quantity is not None else 'missing'} "
-            f"| {h.cost_price if h.cost_price is not None else 'missing'} "
-            f"| {h.current_price if h.current_price is not None else 'missing'} "
-            f"| {mv:.0f} | {f'{pnl:+.2f}' if pnl is not None else 'missing'} | {w:.1f}% |"
+            f"| {h.quantity if h.quantity is not None else '—'} "
+            f"| {h.cost_price if h.cost_price is not None else '—'} "
+            f"| {h.current_price if h.current_price is not None else '—'} "
+            f"| {mv_str} | {pnl_str} | {w:.1f}% |"
         )
+
     header = (
-        "\n## 当前持仓（平台自动填入）\n\n"
-        "| 名称 | 代码 | 市场 | 币种 | 数量 | 成本价 | 现价 | 市值 | 未实现盈亏 | 占比 |\n"
-        "|------|------|------|------|------|-------|------|------|-----------|------|\n"
+        "\n## 当前持仓（平台自动填入，CNY 统一折算口径）\n\n"
+        "| 名称 | 代码 | 市场 | 币种 | 数量 | 成本价 | 现价 | 市值 | 未实现盈亏 | 占比(CNY) |\n"
+        "|------|------|------|------|------|-------|------|------|-----------|----------|\n"
     )
-    return header + "\n".join(rows) + f"\n\n**总市值（加总，未折算）：约 {total:.0f} CNY 等值**\n"
+
+    fx_info = (
+        f"\n**汇率信息**：USD/CNY = {usdcny:.4f}，HKD/CNY ≈ {usdcny / HKD_PEG:.4f}（联系汇率≈7.8 HKD/USD）\n"
+        f"**汇率更新时间**：{fx_updated_at}\n"
+    )
+
+    disclaimer = (
+        "\n> ⚠️ **数据说明**：\n"
+        "> - 以上市值为持仓原币种金额及按 CNY 折算的近似值。\n"
+        "> - 组合占比（权重）基于 CNY 折算市值计算，已统一币种口径。\n"
+        "> - 行情数据非实时数据，可能存在延迟。\n"
+        "> - 汇率并非实时更新，具体更新时间见上方标注。\n"
+        "> - 请勿将 AI 输出视为确定性投资建议。\n"
+    )
+
+    return (
+        header
+        + "\n".join(rows)
+        + f"\n\n**组合总市值（CNY 折算）：约 {total_cny:,.0f} CNY**"
+        + fx_info
+        + disclaimer
+    )
 
 
 def _get_user_ai_key(session: Session, user_id: int, provider: str) -> Optional[UserAIKey]:
@@ -167,7 +240,7 @@ def create_run(
                 Holding.status != HoldingStatus.closed,
             )
         ).all())
-        input_context_md = _portfolio_context(holdings)
+        input_context_md = _portfolio_context(holdings, session)
     elif holding:
         input_context_md = _holding_context(holding, session)
 
@@ -212,6 +285,8 @@ def create_run(
         prompt_md=prompt_md,
         provider=provider,
         model=model,
+        base_url=user_base_url,
+        user_ai_key_id=user_key.id if user_key else None,
     )
     session.add(report)
     session.commit()
@@ -256,15 +331,52 @@ def create_run(
     return report
 
 
+def _resolve_report_ai_key(session: Session, report: ResearchReport) -> tuple:
+    """解析报告的 BYOK 配置，返回 (api_key, provider)。
+
+    报告有 user_ai_key_id → 解密用户 Key；否则返回 (None, report.provider)。
+    如果 Key 已被删除，抛出明确错误。
+    """
+    if report.user_ai_key_id is None:
+        return None, report.provider
+
+    user_key = session.get(UserAIKey, report.user_ai_key_id)
+    if user_key is None:
+        raise AIServiceNotConfigured(
+            f"创建此报告时使用的 AI Key 已被删除（user_ai_key_id={report.user_ai_key_id}），"
+            f"无法刷新。请使用新的 AI Key 重新创建报告。"
+        )
+    if user_key.user_id != report.user_id:
+        raise AIServiceNotConfigured(
+            "报告的 AI Key 引用异常，不属于同一用户。"
+        )
+    try:
+        api_key = decrypt_secret(user_key.encrypted_api_key)
+    except RuntimeError:
+        raise AIServiceNotConfigured(
+            "无法解密创建此报告时使用的 AI Key（加密密钥可能已更换）。"
+            "请重新配置 API Key 并重新创建报告。"
+        )
+    return api_key, user_key.provider
+
+
 def refresh_run(session: Session, report: ResearchReport) -> ResearchReport:
-    """Poll the AI provider and update the report. No-op if not in a running state."""
+    """Poll the AI provider and update the report. No-op if not in a running state.
+
+    使用创建报告时的 BYOK 配置（如果存在）进行 refresh。
+    """
     if report.status not in ("running", "queued"):
         return report
     if not report.provider_response_id:
         return report
 
     try:
-        response = ai_client.retrieve_response(report.provider_response_id)
+        user_api_key, provider = _resolve_report_ai_key(session, report)
+        response = ai_client.retrieve_response(
+            report.provider_response_id,
+            api_key=user_api_key,
+            provider=provider,
+        )
         if ai_client.is_response_complete(response):
             text = ai_client.extract_output_text(response)
             sources = ai_client.extract_sources(response)
@@ -277,6 +389,8 @@ def refresh_run(session: Session, report: ResearchReport) -> ResearchReport:
             report.status = "cancelled" if provider_status == "cancelled" else "failed"
             report.error_message = f"Provider status: {provider_status}"
             report.completed_at = datetime.utcnow()
+    except AIServiceNotConfigured:
+        raise  # BYOK 配置错误必须传播，不能静默吞掉
     except Exception as exc:
         report.error_message = f"刷新失败：{exc}"
 

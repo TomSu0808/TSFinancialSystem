@@ -12,6 +12,8 @@ from auth import get_current_user
 from database import get_session
 from models import (
     Currency,
+    Holding,
+    HoldingSource,
     Platform,
     Transaction,
     TransactionCreate,
@@ -39,10 +41,69 @@ def _owned(session: Session, txn_id: int, user: User) -> Transaction:
     return txn
 
 
+def _check_oversell(
+    session: Session,
+    user: User,
+    txn: Transaction,
+    exclude_txn_id: Optional[int] = None,
+) -> None:
+    """校验 sell 交易不会导致超卖（普通账户禁止卖空）。
+
+    - 新建 sell 时：检查当前持仓数量是否足够。
+    - 修改交易为 sell / 修改 sell 数量时：重放除该交易外的所有流水，
+      检查修改后的卖出量是否超过可用数量。
+    - 全部清仓（卖出 == 当前数量）允许，status 将变为 closed。
+    """
+    if txn.action != TxnAction.sell:
+        return
+    sell_qty = txn.quantity or 0.0
+    if sell_qty <= 0:
+        return  # 无效卖出量由其他逻辑处理
+
+    # 找到对应的 derived 持仓
+    holding = resolve_derived_holding(
+        session, user, txn.platform_id, txn.symbol, txn.currency,
+        name=txn.name, create_if_missing=False,
+    )
+    if holding is None:
+        # 没有持仓却要卖出
+        raise HTTPException(
+            400,
+            f"无法卖出 {txn.symbol or txn.name}："
+            f"该标的在平台内没有持仓（需先有买入记录）。",
+        )
+
+    from position import replay_transactions
+
+    if exclude_txn_id is not None:
+        # 更新场景：重放除当前交易外的所有流水
+        all_txns = session.exec(
+            select(Transaction).where(
+                Transaction.holding_id == holding.id,
+                Transaction.id != exclude_txn_id,
+            )
+        ).all()
+        st = replay_transactions(all_txns)
+        available = st.quantity
+    else:
+        # 新建场景：直接使用当前持仓数量
+        available = holding.quantity or 0.0
+
+    if sell_qty > available + 1e-9:
+        raise HTTPException(
+            400,
+            f"卖出数量（{sell_qty}）超过当前可用持仓（{available}）。"
+            f"普通账户不允许超卖。如需清仓，卖出数量应等于当前持仓。",
+        )
+
+
 def _sync_txn_holding(session: Session, txn: Transaction, user: User) -> None:
     """(重新)绑定 buy/sell/dividend 流水到其 derived 持仓，并重算受影响的持仓。
     买入可自动建仓；卖出/分红只绑定已存在的 derived 持仓。改了 symbol/platform/currency
-    会重绑到新持仓，新旧持仓都会重算。非持仓动作清空 holding_id，避免悬空 FK。"""
+    会重绑到新持仓，新旧持仓都会重算。非持仓动作清空 holding_id，避免悬空 FK。
+
+    deposit / withdraw 会更新 derived cash 持仓的 manual_value（现金账本）。
+    """
     affected = set()
     if txn.holding_id is not None:
         affected.add(txn.holding_id)  # 旧绑定总要重算（动作/标的变更后释放其影响）
@@ -57,6 +118,14 @@ def _sync_txn_holding(session: Session, txn: Transaction, user: User) -> None:
                 session.add(txn)
                 session.commit()
             affected.add(holding.id)
+    elif txn.action in (TxnAction.deposit, TxnAction.withdraw):
+        # 现金账本：更新 derived cash 持仓
+        if txn.holding_id is not None:
+            affected.add(txn.holding_id)  # 原 buy/sell 重算
+            txn.holding_id = None
+            session.add(txn)
+            session.commit()
+        _update_cash_holding(session, user, txn)
     else:
         if txn.holding_id is not None:
             txn.holding_id = None
@@ -64,6 +133,71 @@ def _sync_txn_holding(session: Session, txn: Transaction, user: User) -> None:
             session.commit()
     for hid in affected:
         recompute_holding(session, hid)
+
+
+def _update_cash_holding(session: Session, user: User, txn: Transaction) -> None:
+    """deposit / withdraw：更新 derived cash 持仓的 manual_value。
+
+    每个 (platform_id, currency) 维护一个 cash holding：
+    - deposit: manual_value += amount
+    - withdraw: manual_value -= amount（不低于 0）
+    - buy / sell 第一版不联动现金
+    """
+    if txn.action not in (TxnAction.deposit, TxnAction.withdraw):
+        return
+    if txn.platform_id is None:
+        return  # 没有平台的入金/出金无法归属
+
+    amount = txn.amount or 0.0
+    if amount <= 0:
+        amount = txn.quantity or 0.0
+    if amount <= 0:
+        return
+
+    # 查找或创建 cash holding
+    cash = session.exec(
+        select(Holding).where(
+            Holding.user_id == user.id,
+            Holding.platform_id == txn.platform_id,
+            Holding.currency == txn.currency,
+            Holding.asset_type == "cash",
+            Holding.source == HoldingSource.derived,
+        )
+    ).first()
+
+    if cash is None:
+        cash = Holding(
+            user_id=user.id,
+            platform_id=txn.platform_id,
+            currency=txn.currency,
+            asset_type="cash",
+            market="NONE",
+            name=f"现金余额 ({txn.currency.value})",
+            symbol="",
+            source=HoldingSource.derived,
+            status="open",
+            manual_value=0.0,
+        )
+        session.add(cash)
+        session.commit()
+        session.refresh(cash)
+
+    current_mv = cash.manual_value or 0.0
+    if txn.action == TxnAction.deposit:
+        cash.manual_value = current_mv + amount
+    else:
+        new_val = current_mv - amount
+        if new_val < -1e-9:
+            raise HTTPException(
+                400,
+                f"出金 {amount} {txn.currency.value} 超过当前现金余额 "
+                f"{current_mv} {txn.currency.value}",
+            )
+        cash.manual_value = max(new_val, 0.0)
+
+    cash.price_updated_at = _dt.utcnow()
+    session.add(cash)
+    session.commit()
 
 
 # ─── CSV import helpers ───────────────────────────────────────────────────────
@@ -144,13 +278,25 @@ def _validate_row(row_num: int, row: dict, plat_map: dict) -> tuple:
     return errors, (None if errors else d)
 
 
-def _build_preview(rows_raw: list, plat_map: dict) -> tuple:
-    """返回 (preview_dict, all_valid_rows_data)。preview_dict 的 rows 最多 100 行。"""
+def _build_preview(rows_raw: list, plat_map: dict, holdings_state: Optional[dict] = None) -> tuple:
+    """返回 (preview_dict, all_valid_rows_data)。preview_dict 的 rows 最多 100 行。
+
+    holdings_state: {(platform_id, symbol, currency): quantity} 用于检测超卖。
+    """
     total = len(rows_raw)
     result_rows = []
     valid_count = 0
     error_count = 0
     all_data: list = []
+
+    # 跟踪导入期间的模拟仓位变动（仅在同一次导入内）
+    running_positions: dict = {}
+
+    def _get_available(platform_id, symbol, currency_str):
+        """返回某标的的可用数量（DB + 本次导入已处理的变动）。"""
+        key = (platform_id, symbol, currency_str)
+        base = (holdings_state or {}).get(key, 0.0) if holdings_state else 0.0
+        return base + running_positions.get(key, 0.0)
 
     for i, row in enumerate(rows_raw, 1):
         errors, data = _validate_row(i, row, plat_map)
@@ -158,6 +304,35 @@ def _build_preview(rows_raw: list, plat_map: dict) -> tuple:
             error_count += 1
         else:
             valid_count += 1
+            # 超卖检测：sell 数量不得超过可用数量
+            if data.get("action") == TxnAction.sell and data.get("quantity") is not None:
+                cur_str = str(data.get("currency", Currency.CNY))
+                avail = _get_available(
+                    data.get("platform_id"),
+                    data.get("symbol", ""),
+                    cur_str,
+                )
+                sell_qty = data["quantity"]
+                if sell_qty > avail + 1e-9:
+                    errors = [f"超卖：卖出 {sell_qty} 超过可用 {avail}"]
+                    error_count += 1
+                    valid_count -= 1
+                    all_data.append(data)  # still include for preview display
+                    if i <= 100:
+                        result_rows.append({
+                            "row_number": i,
+                            "valid": False,
+                            "data": data,
+                            "errors": errors,
+                        })
+                    continue
+                # 更新运行仓位
+                key = (data.get("platform_id"), data.get("symbol", ""), cur_str)
+                running_positions[key] = running_positions.get(key, 0.0) - sell_qty
+            elif data.get("action") == TxnAction.buy and data.get("quantity") is not None:
+                key = (data.get("platform_id"), data.get("symbol", ""),
+                       str(data.get("currency", Currency.CNY)))
+                running_positions[key] = running_positions.get(key, 0.0) + data["quantity"]
             all_data.append(data)
         if i <= 100:
             result_rows.append({
@@ -222,6 +397,7 @@ def create_transaction(
     _check_platform(session, data.platform_id, user)
     txn = Transaction.model_validate(data, update={"user_id": user.id})
     txn.holding_id = None  # always system-resolved; never trust client input
+    _check_oversell(session, user, txn)  # 禁止超卖
     session.add(txn)
     session.commit()
     session.refresh(txn)
@@ -238,11 +414,24 @@ async def preview_import(
 ):
     contents = await file.read()
     plat_map = _platforms_by_name(session, user)
+
+    # 获取当前 derived 持仓状态用于超卖检测
+    from models import Holding, HoldingSource
+    holdings_state = {
+        (h.platform_id, h.symbol, str(h.currency)): (h.quantity or 0.0)
+        for h in session.exec(
+            select(Holding).where(
+                Holding.user_id == user.id,
+                Holding.source == HoldingSource.derived,
+            )
+        ).all()
+    }
+
     try:
         rows_raw = _parse_csv_bytes(contents)
     except Exception as e:
         raise HTTPException(400, f"CSV 解析失败：{e}")
-    preview, _ = _build_preview(rows_raw, plat_map)
+    preview, _ = _build_preview(rows_raw, plat_map, holdings_state)
     return preview
 
 
@@ -254,11 +443,24 @@ async def commit_import(
 ):
     contents = await file.read()
     plat_map = _platforms_by_name(session, user)
+
+    # 获取当前 derived 持仓状态用于超卖检测
+    from models import Holding, HoldingSource
+    holdings_state = {
+        (h.platform_id, h.symbol, str(h.currency)): (h.quantity or 0.0)
+        for h in session.exec(
+            select(Holding).where(
+                Holding.user_id == user.id,
+                Holding.source == HoldingSource.derived,
+            )
+        ).all()
+    }
+
     try:
         rows_raw = _parse_csv_bytes(contents)
     except Exception as e:
         raise HTTPException(400, f"CSV 解析失败：{e}")
-    preview, all_data = _build_preview(rows_raw, plat_map)
+    preview, all_data = _build_preview(rows_raw, plat_map, holdings_state)
 
     if preview["error_rows"] > 0:
         raise HTTPException(
@@ -274,6 +476,7 @@ async def commit_import(
         tc = TransactionCreate(**d)
         txn = Transaction.model_validate(tc, update={"user_id": user.id})
         txn.holding_id = None
+        _check_oversell(session, user, txn)  # CSV 导入也禁止超卖
         session.add(txn)
         session.commit()
         session.refresh(txn)
@@ -297,6 +500,7 @@ def update_transaction(
         _check_platform(session, values["platform_id"], user)
     for key, value in values.items():
         setattr(txn, key, value)
+    _check_oversell(session, user, txn, exclude_txn_id=txn_id)  # 禁止超卖
     session.add(txn)
     session.commit()
     session.refresh(txn)

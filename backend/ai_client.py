@@ -23,7 +23,7 @@ _SYNC_RESPONSES: Dict[str, Dict[str, Any]] = {}
 
 DEFAULT_MODELS = {
     "gpt": os.getenv("OPENAI_MODEL", os.getenv("AI_MODEL_GPT", "gpt-5.5")),
-    "deepseek": os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+    "deepseek": os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro"),
     "glm": os.getenv("GLM_MODEL", "glm-4.6"),
     "claude": os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5"),
 }
@@ -275,14 +275,35 @@ def test_provider_connection(
         return {"ok": False, "message": f"连接失败：{msg}"}
 
 
-def retrieve_response(response_id: str) -> Any:
-    """Retrieve a response by its ID."""
+def retrieve_response(
+    response_id: str,
+    api_key: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> Any:
+    """Retrieve a response by its ID.
+
+    When BYOK api_key and provider are provided, use the user's own key.
+    Falls back to system env key only for sync (non-OpenAI) responses.
+    """
     if response_id in _SYNC_RESPONSES:
         return SimpleNamespace(**_SYNC_RESPONSES[response_id])
-    api_key = os.getenv("OPENAI_API_KEY", "")
-    if not api_key:
+
+    # BYOK: use the user's key if provided
+    if api_key and provider:
+        provider_key = normalize_provider(provider)
+        if provider_key == "gpt":
+            client = _openai_client(api_key)
+            return client.responses.retrieve(response_id)
+        # Non-GPT providers are sync — response should be in _SYNC_RESPONSES
+        raise AIServiceNotConfigured(
+            f"Cannot retrieve remote response for {provider_key}: "
+            f"this provider returned a synchronous response."
+        )
+
+    api_key_env = os.getenv("OPENAI_API_KEY", "")
+    if not api_key_env:
         raise AIServiceNotConfigured("GPT service is not configured. Please set OPENAI_API_KEY.")
-    client = _openai_client(api_key)
+    client = _openai_client(api_key_env)
     return client.responses.retrieve(response_id)
 
 
@@ -330,16 +351,37 @@ def is_response_failed(response: Any) -> bool:
     return getattr(response, "status", None) in ("failed", "cancelled", "incomplete")
 
 
-def cancel_response(response_id: str) -> bool:
-    """Attempt to cancel a background response. Returns True on success."""
+def cancel_response(
+    response_id: str,
+    api_key: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> bool:
+    """Attempt to cancel a background response. Returns True on success.
+
+    When BYOK api_key and provider are provided, use the user's own key.
+    """
     if response_id in _SYNC_RESPONSES:
         _SYNC_RESPONSES[response_id]["status"] = "cancelled"
         return True
-    try:
-        api_key = os.getenv("OPENAI_API_KEY", "")
-        if not api_key:
+
+    # BYOK: use the user's key if provided
+    if api_key and provider:
+        provider_key = normalize_provider(provider)
+        try:
+            if provider_key == "gpt":
+                client = _openai_client(api_key)
+                client.responses.cancel(response_id)
+                return True
+            # Non-GPT providers are sync — already completed
+            return True
+        except Exception:
             return False
-        client = _openai_client(api_key)
+
+    try:
+        api_key_env = os.getenv("OPENAI_API_KEY", "")
+        if not api_key_env:
+            return False
+        client = _openai_client(api_key_env)
         client.responses.cancel(response_id)
         return True
     except Exception:

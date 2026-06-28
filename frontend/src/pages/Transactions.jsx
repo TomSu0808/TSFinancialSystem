@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import {
-  Button, Card, DatePicker, Form, Input, InputNumber, Modal, Popconfirm,
-  Select, Space, Table, Tag, Upload, message,
+  Button, Card, Collapse, DatePicker, Drawer, Form, Input, InputNumber, Modal, Popconfirm,
+  Radio, Select, Space, Steps, Table, Tag, Upload, message,
 } from 'antd'
 import { InboxOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
   listTransactions, createTransaction, updateTransaction, deleteTransaction,
   listPlatforms, previewTransactionImport, commitTransactionImport,
+  previewImport, commitImport, getImportReconciliation, getImportDetail,
 } from '../api'
 import {
   CURRENCIES, TXN_ACTIONS, TXN_ACTION_LABEL, CURRENCY_SYMBOL, fmt,
@@ -43,12 +44,25 @@ export default function Transactions() {
   const [form] = Form.useForm()
   const [filterForm] = Form.useForm()
 
-  // CSV import state
+  // CSV import state (old)
   const [csvOpen, setCsvOpen] = useState(false)
   const [csvFile, setCsvFile] = useState(null)
   const [csvPreview, setCsvPreview] = useState(null)
   const [csvPreviewing, setCsvPreviewing] = useState(false)
   const [csvImporting, setCsvImporting] = useState(false)
+
+  // New import wizard state
+  const [importOpen, setImportOpen] = useState(false)
+  const [importStep, setImportStep] = useState(0)
+  const [importBroker, setImportBroker] = useState('futu')
+  const [importPlatformId, setImportPlatformId] = useState(null)
+  const [importFile, setImportFile] = useState(null)
+  const [importSessionId, setImportSessionId] = useState(null)
+  const [importPreview, setImportPreview] = useState(null)
+  const [importPreviewing, setImportPreviewing] = useState(false)
+  const [importCommitting, setImportCommitting] = useState(false)
+  const [importRecon, setImportRecon] = useState(null)
+  const [importFields, setImportFields] = useState({})
 
   const platName = useMemo(
     () => Object.fromEntries(platforms.map((p) => [p.id, p.name])),
@@ -186,6 +200,124 @@ export default function Transactions() {
     URL.revokeObjectURL(url)
   }
 
+  // ── New import wizard ──────────────────────────────────────────────────────
+  const openImportWizard = () => {
+    setImportStep(0)
+    setImportBroker('futu')
+    setImportPlatformId(null)
+    setImportFile(null)
+    setImportSessionId(null)
+    setImportPreview(null)
+    setImportRecon(null)
+    setImportFields({})
+    setImportOpen(true)
+  }
+
+  const handleImportFile = async (file) => {
+    setImportFile(file)
+    setImportPreviewing(true)
+    setImportPreview(null)
+    try {
+      const result = await previewImport(file, {
+        platform_id: importPlatformId,
+        broker_type: importBroker,
+      })
+      setImportSessionId(result.import_session_id)
+      setImportPreview(result)
+      setImportFields(result.detected_fields || {})
+      setImportStep(2)
+    } catch (e) {
+      message.error('解析失败：' + (e.response?.data?.detail || e.message))
+    } finally {
+      setImportPreviewing(false)
+    }
+    return false
+  }
+
+  const handleImportCommit = async () => {
+    if (!importSessionId) return
+    setImportCommitting(true)
+    try {
+      const result = await commitImport(importSessionId, {})
+      message.success(`已成功导入 ${result.created_count} 条交易`)
+      // Load reconciliation
+      try {
+        const recon = await getImportReconciliation(importSessionId)
+        setImportRecon(recon)
+      } catch (e) {
+        // reconciliation may not be available
+      }
+      setImportStep(3)
+      load()
+    } catch (e) {
+      message.error('导入失败：' + (e.response?.data?.detail || e.message))
+    } finally {
+      setImportCommitting(false)
+    }
+  }
+
+  const importPreviewColumns = [
+    { title: '行', dataIndex: 'row_number', width: 50 },
+    {
+      title: '状态', dataIndex: 'status', width: 70,
+      render: (v) => {
+        const color = v === 'valid' ? 'green' : v === 'warning' ? 'orange' : v === 'duplicate' ? 'default' : 'red'
+        const label = v === 'valid' ? '✓' : v === 'warning' ? '⚠' : v === 'duplicate' ? '重' : '✗'
+        return <Tag color={color}>{label}</Tag>
+      },
+    },
+    {
+      title: '交易内容',
+      render: (_, r) => {
+        const d = r.data || {}
+        return (
+          <Space size={4} wrap>
+            <span style={{ fontSize: 12 }}>{d.date}</span>
+            <Tag style={{ fontSize: 11 }}>{TXN_ACTION_LABEL[d.action] || d.action}</Tag>
+            <span style={{ fontSize: 12 }}>{d.name || d.symbol || '—'}</span>
+            {d.symbol && <span style={{ color: '#999', fontSize: 11 }}>{d.symbol}</span>}
+            {d.quantity != null && <span style={{ fontSize: 11 }}>×{d.quantity}</span>}
+          </Space>
+        )
+      },
+    },
+    {
+      title: '提示',
+      render: (_, r) => (
+        <div>
+          {r.warnings?.map((w, i) => <div key={i} style={{ color: '#fa8c16', fontSize: 11 }}>{w}</div>)}
+          {r.errors?.map((e, i) => <div key={i} style={{ color: '#cf1322', fontSize: 11 }}>{e}</div>)}
+        </div>
+      ),
+    },
+  ]
+
+  const reconColumns = [
+    { title: '代码', dataIndex: 'symbol', width: 100 },
+    { title: '名称', dataIndex: 'name' },
+    { title: '币种', dataIndex: 'currency', width: 60 },
+    {
+      title: '券商数量', dataIndex: 'broker_quantity', align: 'right',
+      render: (v) => v != null ? fmt(v) : '—',
+    },
+    {
+      title: '系统数量', dataIndex: 'system_quantity', align: 'right',
+      render: (v) => v != null ? fmt(v) : '—',
+    },
+    {
+      title: '差异', dataIndex: 'quantity_diff', align: 'right',
+      render: (v) => v != null ? <span style={{ color: v === 0 ? '#52c41a' : '#cf1322', fontWeight: 600 }}>{fmt(v)}</span> : '—',
+    },
+    {
+      title: '状态', dataIndex: 'status', width: 80,
+      render: (v) => {
+        const color = v === 'matched' ? 'green' : v === 'warning' ? 'orange' : 'red'
+        const label = v === 'matched' ? '一致' : v === 'warning' ? '偏差' : '异常'
+        return <Tag color={color}>{label}</Tag>
+      },
+    },
+  ]
+
   const previewColumns = [
     { title: '行', dataIndex: 'row_number', width: 50 },
     {
@@ -257,8 +389,11 @@ export default function Transactions() {
       title="交易记录"
       extra={
         <Space>
-          <Button icon={<UploadOutlined />} onClick={() => { setCsvOpen(true); setCsvFile(null); setCsvPreview(null) }}>
-            导入 CSV
+          <Button icon={<UploadOutlined />} onClick={openImportWizard}>
+            导入交易
+          </Button>
+          <Button icon={<UploadOutlined />} onClick={() => { setCsvOpen(true); setCsvFile(null); setCsvPreview(null) }} style={{ display: 'none' }}>
+            {/* 旧版导入（隐藏，API 仍可用）*/}
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>记一笔</Button>
         </Space>
@@ -360,7 +495,219 @@ export default function Transactions() {
         </Form>
       </Modal>
 
-      {/* CSV 导入 Modal */}
+      {/* ── 新版导入向导 Drawer ────────────────────────────────────────────── */}
+      <Drawer
+        title="导入交易记录"
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        width={780}
+        destroyOnHidden
+      >
+        <Steps
+          current={importStep}
+          size="small"
+          style={{ marginBottom: 24 }}
+          items={[
+            { title: '选择券商' },
+            { title: '上传文件' },
+            { title: '预览确认' },
+            { title: '完成' },
+          ]}
+        />
+
+        {/* Step 0: 选择券商类型 */}
+        {importStep === 0 && (
+          <div>
+            <div style={{ marginBottom: 16, fontWeight: 500 }}>选择券商类型</div>
+            <Radio.Group
+              value={importBroker}
+              onChange={(e) => setImportBroker(e.target.value)}
+              style={{ marginBottom: 24 }}
+            >
+              <Space direction="vertical">
+                <Radio value="futu">
+                  <b>富途证券</b> — 支持中英文 CSV 导出，自动识别列名
+                </Radio>
+                <Radio value="ibkr">
+                  <b>IBKR (盈透证券)</b> — 支持 Activity Statement CSV
+                </Radio>
+                <Radio value="generic">
+                  <b>通用格式</b> — 手动匹配 CSV 列到标准字段
+                </Radio>
+              </Space>
+            </Radio.Group>
+            <div style={{ marginBottom: 16, fontWeight: 500 }}>选择平台（可选）</div>
+            <Select
+              allowClear
+              placeholder="选择对应账户平台"
+              style={{ width: 300 }}
+              value={importPlatformId}
+              onChange={setImportPlatformId}
+              options={platforms.map((p) => ({ value: p.id, label: p.name }))}
+            />
+            <div style={{ marginTop: 24 }}>
+              <Button type="primary" onClick={() => setImportStep(1)}>
+                下一步
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 1: 上传文件 */}
+        {importStep === 1 && (
+          <div>
+            <Upload.Dragger
+              accept=".csv"
+              maxCount={1}
+              beforeUpload={handleImportFile}
+              showUploadList={false}
+            >
+              <p style={{ margin: '8px 0 4px' }}>
+                <InboxOutlined style={{ fontSize: 32, color: '#1677ff' }} />
+              </p>
+              <p style={{ margin: '0 0 4px', color: '#333' }}>点击或拖拽 CSV 文件到此处</p>
+              {importFile && (
+                <p style={{ margin: 0, color: '#1677ff', fontSize: 12 }}>{importFile.name}</p>
+              )}
+            </Upload.Dragger>
+            {importPreviewing && (
+              <div style={{ textAlign: 'center', padding: '16px 0', color: '#888' }}>解析中…</div>
+            )}
+            <div style={{ marginTop: 16 }}>
+              <Button onClick={() => setImportStep(0)}>上一步</Button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 2: 预览 */}
+        {importStep === 2 && importPreview && (
+          <div>
+            {/* 字段映射摘要 */}
+            {Object.keys(importFields).length > 0 && (
+              <Collapse
+                size="small"
+                style={{ marginBottom: 12 }}
+                items={[{
+                  key: 'fields', label: '识别的字段映射',
+                  children: (
+                    <div style={{ fontSize: 12 }}>
+                      {Object.entries(importFields).map(([k, v]) => (
+                        <Tag key={k} style={{ marginBottom: 4 }}>
+                          {k} ← {v || '未识别'}
+                        </Tag>
+                      ))}
+                    </div>
+                  ),
+                }]}
+              />
+            )}
+
+            {/* Summary */}
+            <Space style={{ marginBottom: 12 }} wrap>
+              <span style={{ color: '#555' }}>共 <b>{importPreview.summary?.total}</b> 行</span>
+              <Tag color="green">可导入 {importPreview.summary?.valid} 行</Tag>
+              {importPreview.summary?.warning > 0 && (
+                <Tag color="orange">警告 {importPreview.summary.warning} 行</Tag>
+              )}
+              {importPreview.summary?.duplicate > 0 && (
+                <Tag color="default">重复 {importPreview.summary.duplicate} 行</Tag>
+              )}
+              {importPreview.summary?.error > 0 && (
+                <Tag color="red">错误 {importPreview.summary.error} 行</Tag>
+              )}
+            </Space>
+
+            <Table
+              dataSource={importPreview.rows}
+              rowKey="row_number"
+              size="small"
+              pagination={{ pageSize: 15, hideOnSinglePage: true }}
+              columns={importPreviewColumns}
+              rowClassName={(r) => {
+                if (r.status === 'error') return 'ant-table-row-danger'
+                if (r.status === 'duplicate') return 'ant-table-row-warning'
+                return ''
+              }}
+              style={{ maxHeight: 400, overflow: 'auto' }}
+            />
+
+            <div style={{ marginTop: 16 }}>
+              <Space>
+                <Button onClick={() => { setImportStep(1); setImportPreview(null) }}>重新上传</Button>
+                <Button
+                  type="primary"
+                  onClick={handleImportCommit}
+                  loading={importCommitting}
+                  disabled={importPreview.summary?.valid === 0}
+                >
+                  确认导入（{importPreview.summary?.valid || 0} 条）
+                </Button>
+              </Space>
+            </div>
+          </div>
+        )}
+
+        {/* Step 3: 导入结果 + 对账 */}
+        {importStep === 3 && (
+          <div>
+            <div style={{ marginBottom: 16 }}>
+              <Tag color="green" style={{ fontSize: 14, padding: '4px 12px' }}>
+                导入完成
+              </Tag>
+              <span style={{ marginLeft: 8, color: '#555' }}>
+                交易已写入系统，持仓已同步更新
+              </span>
+            </div>
+
+            {importRecon ? (
+              <div>
+                <div style={{ fontWeight: 500, marginBottom: 8 }}>
+                  对账结果：共 {importRecon.total_items} 项，
+                  <Tag color="green" style={{ marginLeft: 8 }}>{importRecon.matched_count} 一致</Tag>
+                  {importRecon.warning_count > 0 && (
+                    <Tag color="orange">{importRecon.warning_count} 偏差</Tag>
+                  )}
+                  {importRecon.error_count > 0 && (
+                    <Tag color="red">{importRecon.error_count} 异常</Tag>
+                  )}
+                </div>
+                <Table
+                  dataSource={importRecon.items}
+                  rowKey="symbol"
+                  size="small"
+                  pagination={false}
+                  columns={reconColumns}
+                  scroll={{ x: 700 }}
+                  style={{ marginTop: 12 }}
+                />
+              </div>
+            ) : (
+              <div style={{ color: '#888' }}>
+                未生成对账数据（可能因为导入文件中无持仓信息）
+              </div>
+            )}
+
+            <div style={{ marginTop: 24 }}>
+              <Space>
+                <Button type="primary" onClick={() => { setImportOpen(false); load() }}>
+                  完成
+                </Button>
+                <Button onClick={() => {
+                  setImportStep(0)
+                  setImportFile(null)
+                  setImportSessionId(null)
+                  setImportPreview(null)
+                  setImportRecon(null)
+                }}>
+                  再导入一份
+                </Button>
+              </Space>
+            </div>
+          </div>
+        )}
+      </Drawer>
+
+      {/* CSV 导入 Modal（旧版，保留兼容）*/}
       <Modal
         title="导入 CSV 交易记录"
         open={csvOpen}

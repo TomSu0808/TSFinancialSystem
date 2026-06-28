@@ -524,3 +524,184 @@ def test_backup_import_restores_skill_md_and_language(engine2, user_a):
     assert reports[0]["skill_md"] == "# Archived Skill\nTest content."
     assert reports[0]["report_md"] == "## Report\nTest report."
     client.app.dependency_overrides.clear()
+
+
+# ── Portfolio Review 币种混算修复测试 ───────────────────────────────
+
+def test_portfolio_review_uses_cny_converted_weights(engine2, user_a):
+    """Portfolio Review 的组合权重必须基于 CNY 折算市值而非原币种市值直接加总。"""
+    from models import Platform, Holding, FxRate
+    from datetime import datetime
+
+    with Session(engine2) as s:
+        # 设置汇率: 1 USD = 7.2 CNY
+        s.add(FxRate(pair="USDCNY", rate=7.2, updated_at=datetime.utcnow()))
+        s.commit()
+
+        plat = Platform(user_id=user_a.id, name="混合平台")
+        s.add(plat)
+        s.commit()
+        s.refresh(plat)
+
+        # CNY 持仓: 市值 100,000 CNY
+        s.add(Holding(
+            user_id=user_a.id, platform_id=plat.id, currency="CNY",
+            name="茅台", symbol="600519", market="A",
+            quantity=100.0, cost_price=1000.0, current_price=1000.0,
+        ))
+        # USD 持仓: 市值 10,000 USD → ≈72,000 CNY
+        s.add(Holding(
+            user_id=user_a.id, platform_id=plat.id, currency="USD",
+            name="Apple", symbol="AAPL", market="US",
+            quantity=100.0, cost_price=90.0, current_price=100.0,
+        ))
+        # HKD 持仓: 市值 78,000 HKD → ≈7,200 CNY (with peg 7.8)
+        s.add(Holding(
+            user_id=user_a.id, platform_id=plat.id, currency="HKD",
+            name="腾讯", symbol="0700", market="HK",
+            quantity=200.0, cost_price=350.0, current_price=390.0,
+        ))
+        s.commit()
+
+    client = _make_client(engine2, user_a)
+    resp = client.post("/api/research/prompts", json={
+        "template_key": "portfolio-review",
+        "target_name": "",
+    })
+    assert resp.status_code == 200
+    prompt = resp.json()["prompt"]
+
+    # 验证 prompt 包含 CNY 折算总市值
+    assert "CNY 折算" in prompt
+    # 验证包含汇率信息
+    assert "USD/CNY" in prompt
+    assert "7.2" in prompt
+    assert "汇率更新时间" in prompt or "HKD/CNY" in prompt
+    # 验证包含数据说明/免责声明
+    assert "数据说明" in prompt or "非实时" in prompt
+    # Apple (USD) 的占比应基于 CNY 折算值 (7,2000/179,200 ≈ 40.2%)，而非原币种 (10,000/188,100 ≈ 5.3%)
+    # 验证 prompt 中显示货币标注（USD 持仓应显示 CNY 折算值）
+    assert "CNY" in prompt  # 有 CNY 折算标注
+    client.app.dependency_overrides.clear()
+
+
+def test_portfolio_review_no_raw_mixed_currency_total(engine2, user_a):
+    """prompt 中不应出现未折算直接加总的组合总市值。"""
+    from models import Platform, Holding, FxRate
+    from datetime import datetime
+
+    with Session(engine2) as s:
+        s.add(FxRate(pair="USDCNY", rate=7.2, updated_at=datetime.utcnow()))
+        s.commit()
+        plat = Platform(user_id=user_a.id, name="多币种")
+        s.add(plat)
+        s.commit()
+        s.refresh(plat)
+
+        s.add(Holding(
+            user_id=user_a.id, platform_id=plat.id, currency="CNY",
+            name="A股", symbol="000001", market="A",
+            quantity=1000.0, current_price=10.0,
+        ))
+        s.add(Holding(
+            user_id=user_a.id, platform_id=plat.id, currency="USD",
+            name="美股", symbol="MSFT", market="US",
+            quantity=50.0, current_price=200.0,
+        ))
+        s.commit()
+
+    client = _make_client(engine2, user_a)
+    resp = client.post("/api/research/prompts", json={
+        "template_key": "portfolio-review",
+        "target_name": "",
+    })
+    assert resp.status_code == 200
+    prompt = resp.json()["prompt"]
+
+    # 不应出现"加总，未折算"这样的旧文案
+    assert "未折算" not in prompt
+    # 不应出现直接加总的表述（10,000 + 10,000 = 20,000 无意义）
+    # 应该出现 CNY 折算后的总值
+    assert "CNY 折算" in prompt
+    client.app.dependency_overrides.clear()
+
+
+def test_research_service_portfolio_context_uses_fx_rates():
+    """测试 research_service._portfolio_context 正确处理多币种。"""
+    from models import Platform, User, Holding, FxRate
+    from datetime import datetime
+    from sqlmodel import Session as SqlSession, select as sql_select
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    SQLModel.metadata.create_all(engine)
+
+    with SqlSession(engine) as s:
+        u = User(username="pfx", password_hash="x"); s.add(u); s.commit(); s.refresh(u)
+        p = Platform(user_id=u.id, name="P"); s.add(p); s.commit(); s.refresh(p)
+
+        s.add(FxRate(pair="USDCNY", rate=7.0, updated_at=datetime.utcnow()))
+        s.commit()
+
+        # CNY 持仓: 市值 100,000
+        s.add(Holding(user_id=u.id, platform_id=p.id, currency="CNY", name="A", symbol="A",
+                      quantity=100, cost_price=1000, current_price=1000, market="A"))
+        # USD 持仓: 市值 10,000 → 70,000 CNY
+        s.add(Holding(user_id=u.id, platform_id=p.id, currency="USD", name="B", symbol="B",
+                      quantity=100, cost_price=90, current_price=100, market="US"))
+        s.commit()
+
+        from research_service import _portfolio_context
+        holdings = list(s.exec(sql_select(Holding).where(Holding.user_id == u.id)).all())
+        ctx = _portfolio_context(holdings, s)
+
+        # 总市值应为 170,000 CNY (100,000 + 70,000)
+        assert "170,000 CNY" in ctx or "170000 CNY" in ctx
+        # 应包含汇率信息
+        assert "7.0" in ctx or "7.00" in ctx
+        # 应包含数据说明
+        assert "数据说明" in ctx or "非实时" in ctx
+        # B 的市值应显示原币种和 CNY 折算
+        assert "USD" in ctx
+
+
+def test_portfolio_review_empty_holdings(engine2, user_a):
+    """无持仓时不应报错，返回明确提示。"""
+    client = _make_client(engine2, user_a)
+    resp = client.post("/api/research/prompts", json={
+        "template_key": "portfolio-review",
+        "target_name": "",
+    })
+    assert resp.status_code == 200
+    prompt = resp.json()["prompt"]
+    assert "无持仓" in prompt
+    client.app.dependency_overrides.clear()
+
+
+def test_portfolio_review_single_currency_no_fx_needed(engine2, user_a):
+    """只有 CNY 持仓时，不需要复杂折算，但应标注 CNY 口径。"""
+    from models import Platform, Holding
+
+    with Session(engine2) as s:
+        plat = Platform(user_id=user_a.id, name="人民币平台")
+        s.add(plat)
+        s.commit()
+        s.refresh(plat)
+        s.add(Holding(
+            user_id=user_a.id, platform_id=plat.id, currency="CNY",
+            name="茅台", symbol="600519", market="A",
+            quantity=100.0, current_price=1000.0,
+        ))
+        s.commit()
+
+    client = _make_client(engine2, user_a)
+    resp = client.post("/api/research/prompts", json={
+        "template_key": "portfolio-review",
+        "target_name": "",
+    })
+    assert resp.status_code == 200
+    prompt = resp.json()["prompt"]
+    # 纯 CNY 组合的权重应为 100%
+    assert "100.0%" in prompt
+    # 不应出现未折算标记
+    assert "未折算" not in prompt
+    client.app.dependency_overrides.clear()

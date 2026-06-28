@@ -1,6 +1,6 @@
 """一级界面汇总：总额、今日涨跌、累计盈亏、按币种/平台/类型拆分 + 每日净值快照（按用户隔离）。"""
 from datetime import datetime, timedelta
-from typing import Dict
+from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlmodel import Session, select
@@ -206,4 +206,141 @@ def get_summary(
         "top_movers": top_movers,
         "return_breakdown": return_breakdown,
         "data_freshness": data_freshness,
+    }
+
+
+# ── 数据状态中心 ─────────────────────────────────────────────────────────
+
+# 过期规则（保守默认值，后续可集中调整）
+STALE_HOURS_PRICE = 24       # 行情超过 24h 视为过期
+STALE_HOURS_FX = 12          # 汇率超过 12h 视为过期
+STALE_HOURS_MANUAL = 72      # 手填资产超过 72h 未更新视为过期
+STALE_HOURS_AI_REPORT = 168  # AI 报告超过 7 天未更新视为过期
+
+
+def _is_stale(updated_at: Optional[datetime], stale_hours: int) -> bool:
+    if updated_at is None:
+        return True
+    return (datetime.utcnow() - updated_at).total_seconds() > stale_hours * 3600
+
+
+@router.get("/data-status")
+def get_data_status(
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """汇总所有数据的状态：行情、汇率、手填资产、AI 报告。"""
+    now = datetime.utcnow()
+
+    # ── 1. 汇率状态 ─────────────────────────────────────────────
+    fx = get_or_create_rate(session)
+    fx_status = {
+        "data_type": "汇率",
+        "source": "open.er-api.com（回退：中行）",
+        "rate": round(fx.rate, 4),
+        "updated_at": fx.updated_at.isoformat() if fx.updated_at else None,
+        "is_stale": _is_stale(fx.updated_at, STALE_HOURS_FX),
+        "description": (
+            f"USD/CNY = {fx.rate:.4f}，"
+            f"更新于 {fx.updated_at.strftime('%Y-%m-%d %H:%M UTC') if fx.updated_at else '未知时间'}"
+        ),
+    }
+
+    # ── 2. 持仓行情状态 ──────────────────────────────────────────
+    holdings = session.exec(
+        select(Holding).where(Holding.user_id == user.id)
+    ).all()
+
+    price_items = []
+    manual_items = []
+    for h in holdings:
+        is_stale = _is_stale(h.price_updated_at, STALE_HOURS_PRICE)
+        if h.source == "manual" and h.manual_value is not None:
+            manual_items.append({
+                "id": h.id,
+                "name": h.name,
+                "asset_type": h.asset_type.value,
+                "currency": h.currency.value,
+                "manual_value": h.manual_value,
+                "updated_at": h.price_updated_at.isoformat() if h.price_updated_at else None,
+                "is_stale": _is_stale(h.price_updated_at, STALE_HOURS_MANUAL),
+            })
+        if h.current_price is not None:
+            source_map = {
+                "A": "akshare（东方财富快照）",
+                "HK": "akshare（东方财富快照）",
+                "US": "akshare（东方财富快照）",
+                "FUND": "akshare（基金净值）",
+                "CRYPTO": "CoinGecko 免费接口",
+                "NONE": "手动维护",
+            }
+            price_items.append({
+                "id": h.id,
+                "name": h.name,
+                "symbol": h.symbol,
+                "asset_type": h.asset_type.value,
+                "market": h.market.value,
+                "currency": h.currency.value,
+                "current_price": h.current_price,
+                "source": source_map.get(h.market.value, "未知"),
+                "price_updated_at": h.price_updated_at.isoformat() if h.price_updated_at else None,
+                "is_stale": is_stale,
+            })
+
+    priced_count = len(price_items)
+    stale_count = sum(1 for p in price_items if p["is_stale"])
+
+    # ── 3. AI 报告状态 ───────────────────────────────────────────
+    from models import ResearchReport as RR
+    reports = session.exec(
+        select(RR).where(
+            RR.user_id == user.id,
+            RR.status.in_(["completed", "running"]),
+        ).order_by(RR.updated_at.desc()).limit(10)
+    ).all()
+
+    ai_items = []
+    for r in reports:
+        ai_items.append({
+            "id": r.id,
+            "title": r.title,
+            "template_key": r.template_key,
+            "status": r.status,
+            "provider": r.provider or "unknown",
+            "model": r.model or "unknown",
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+            "is_stale": _is_stale(r.completed_at or r.created_at, STALE_HOURS_AI_REPORT),
+            "has_byok": r.user_ai_key_id is not None,
+        })
+
+    # ── 4. 汇总 ─────────────────────────────────────────────────
+    return {
+        "generated_at": now.isoformat(),
+        "fx": fx_status,
+        "holdings": {
+            "priced_count": priced_count,
+            "stale_count": stale_count,
+            "total_open": len([h for h in holdings if h.status == "open"]),
+            "stale_threshold_hours": STALE_HOURS_PRICE,
+            "items": price_items[:20],  # 最多返回 20 条
+        },
+        "manual_assets": {
+            "count": len(manual_items),
+            "stale_count": sum(1 for m in manual_items if m["is_stale"]),
+            "stale_threshold_hours": STALE_HOURS_MANUAL,
+            "items": manual_items[:10],
+        },
+        "ai_reports": {
+            "count": len(ai_items),
+            "stale_count": sum(1 for a in ai_items if a["is_stale"]),
+            "stale_threshold_hours": STALE_HOURS_AI_REPORT,
+            "items": ai_items,
+        },
+        "stale_thresholds": {
+            "price_hours": STALE_HOURS_PRICE,
+            "fx_hours": STALE_HOURS_FX,
+            "manual_hours": STALE_HOURS_MANUAL,
+            "ai_report_hours": STALE_HOURS_AI_REPORT,
+        },
     }
