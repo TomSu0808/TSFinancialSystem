@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Alert, Button, Card, Form, Input, Modal, Select, Tabs, Typography, message } from 'antd'
-import { LockOutlined, MailOutlined, QuestionCircleOutlined, UserOutlined } from '@ant-design/icons'
+import { Alert, Button, Card, Col, Form, Input, Modal, Row, Select, Space, Tabs, Typography, message } from 'antd'
+import {
+  LockOutlined, MailOutlined, QuestionCircleOutlined, UserOutlined,
+} from '@ant-design/icons'
 import {
   forgotPassword, getRecoveryQuestion, login, register,
   resetPassword, resetPasswordBySecurityQuestion, verifyEmail,
 } from '../api'
 
-const { Title, Text } = Typography
+const { Title, Text, Paragraph } = Typography
 
 // 与后端 SECURITY_QUESTIONS 保持一致
 const SECURITY_QUESTIONS = [
@@ -24,6 +26,32 @@ function detectMode() {
   if (token && path.includes('verify-email')) return { mode: 'verify-email', token }
   if (token && path.includes('reset-password')) return { mode: 'reset-password', token }
   return { mode: null, token: null }
+}
+
+// 登录页左侧功能亮点卡片（不含任何真实/模拟持仓数据）
+function FeatureHighlights() {
+  const items = [
+    { color: '#e6f4ff', border: '#bae0ff', icon: '📊', title: '多平台聚合', desc: '券商、银行、钱包统一管理，一屏纵览全局' },
+    { color: '#f6ffed', border: '#b7eb8f', icon: '⚡', title: '交易驱动', desc: '买卖流水自动更新持仓成本与已实现盈亏' },
+    { color: '#fff7e6', border: '#ffd591', icon: '🤖', title: 'AI 投研', desc: '接入 GPT / DeepSeek / Claude 生成结构化报告' },
+    { color: '#f9f0ff', border: '#d3adf7', icon: '🔒', title: '私有部署', desc: '数据完全由你掌控，支持 Docker 一键自托管' },
+  ]
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+      {items.map((item) => (
+        <div key={item.title} style={{
+          background: item.color,
+          border: `1px solid ${item.border}`,
+          borderRadius: 10,
+          padding: '12px 14px',
+        }}>
+          <div style={{ fontSize: 20, marginBottom: 6 }}>{item.icon}</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#141414', marginBottom: 3 }}>{item.title}</div>
+          <div style={{ fontSize: 11, color: '#595959', lineHeight: 1.5 }}>{item.desc}</div>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 export default function Login({ onAuthed }) {
@@ -328,96 +356,140 @@ export default function Login({ onAuthed }) {
 
   // ── 主登录/注册页 ───────────────────────────────────────────────────
   return (
-    <PageWrap>
-      <Card style={{ width: 420, maxWidth: '100%' }}>
-        <Title level={3} style={{ textAlign: 'center', marginBottom: 8 }}>TS FinancialSystem</Title>
-        <Tabs
-          activeKey={tab}
-          onChange={setTab}
-          centered
-          items={[
-            {
-              key: 'login',
-              label: '登录',
-              children: (
-                <Form form={loginForm} layout="vertical" onFinish={doLogin}>
-                  <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
-                    <Input prefix={<UserOutlined />} placeholder="用户名" autoComplete="username" />
-                  </Form.Item>
-                  <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
-                    <Input.Password prefix={<LockOutlined />} placeholder="密码" autoComplete="current-password" onPressEnter={doLogin} />
-                  </Form.Item>
-                  <Button type="primary" block loading={loading} onClick={doLogin}>登录</Button>
-                  <div style={{ textAlign: 'right', marginTop: 8 }}>
-                    <Text
-                      style={{ cursor: 'pointer', color: '#1677ff' }}
-                      onClick={() => setRecoveryState('step1')}
-                    >
-                      忘记密码？
-                    </Text>
-                  </div>
-                </Form>
-              ),
-            },
-            {
-              key: 'register',
-              label: '注册',
-              children: (
-                <Form form={regForm} layout="vertical" onFinish={doRegister}>
-                  <Form.Item
-                    name="username"
-                    rules={[
-                      { required: true, message: '请输入用户名' },
-                      { pattern: /^[a-zA-Z0-9_-]{3,32}$/, message: '只允许字母、数字、下划线、短横线，长度 3-32' },
-                    ]}
-                  >
-                    <Input prefix={<UserOutlined />} placeholder="用户名（3-32位）" autoComplete="username" />
-                  </Form.Item>
-                  <Form.Item
-                    name="email"
-                    rules={[{ type: 'email', message: '邮箱格式不正确' }]}
-                    extra="可选，用于邮箱验证和找回密码"
-                  >
-                    <Input prefix={<MailOutlined />} placeholder="邮箱（可选）" autoComplete="email" />
-                  </Form.Item>
-                  <Form.Item
-                    name="password"
-                    rules={[
-                      { required: true, message: '请设置密码' },
-                      { min: 8, message: '密码至少 8 位' },
-                    ]}
-                  >
-                    <Input.Password prefix={<LockOutlined />} placeholder="密码（至少 8 位）" autoComplete="new-password" />
-                  </Form.Item>
-                  <Form.Item
-                    name="security_question_key"
-                    label="安全问题"
-                    rules={[{ required: true, message: '请选择安全问题，用于找回密码' }]}
-                  >
-                    <Select placeholder="请选择安全问题" suffixIcon={<QuestionCircleOutlined />}>
-                      {SECURITY_QUESTIONS.map((q) => (
-                        <Select.Option key={q.key} value={q.key}>{q.text}</Select.Option>
-                      ))}
-                    </Select>
-                  </Form.Item>
-                  <Form.Item
-                    name="security_answer"
-                    label="答案"
-                    extra="请牢记此答案，找回密码时需要"
-                    rules={[
-                      { required: true, message: '请输入安全问题的答案' },
-                      { max: 100, message: '答案最多 100 字符' },
-                    ]}
-                  >
-                    <Input placeholder="输入安全问题的答案" autoComplete="off" />
-                  </Form.Item>
-                  <Button type="primary" block loading={loading} onClick={doRegister}>注册并登录</Button>
-                </Form>
-              ),
-            },
-          ]}
-        />
-      </Card>
+    <PageWrap hasSidebar>
+      <Row style={{ width: '100%', maxWidth: 1020 }}>
+        {/* 右侧：登录/注册卡片（移动端优先展示） */}
+        <Col xs={{ span: 24, order: 1 }} md={{ span: 10, order: 2 }} style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '24px 16px 16px',
+        }}>
+          <Card
+            style={{
+              width: '100%', maxWidth: 400,
+              boxShadow: '0 4px 24px rgba(0,0,0,0.06)',
+              borderRadius: 12, border: '1px solid #e8ecf1',
+            }}
+            styles={{ body: { padding: '28px 24px' } }}
+          >
+            <Title level={4} style={{ textAlign: 'center', marginBottom: 4, marginTop: 0 }}>
+              TS FinancialSystem
+            </Title>
+            <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginBottom: 20, fontSize: 13 }}>
+              多币种个人资产管理平台
+            </Text>
+            <Tabs
+              activeKey={tab}
+              onChange={setTab}
+              centered
+              items={[
+                {
+                  key: 'login',
+                  label: '登录',
+                  children: (
+                    <Form form={loginForm} layout="vertical" onFinish={doLogin}>
+                      <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
+                        <Input prefix={<UserOutlined />} placeholder="用户名" autoComplete="username" />
+                      </Form.Item>
+                      <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
+                        <Input.Password prefix={<LockOutlined />} placeholder="密码" autoComplete="current-password" onPressEnter={doLogin} />
+                      </Form.Item>
+                      <Button type="primary" block loading={loading} onClick={doLogin}>登录</Button>
+                      <div style={{ textAlign: 'right', marginTop: 8 }}>
+                        <Text
+                          style={{ cursor: 'pointer', color: '#1677ff' }}
+                          onClick={() => setRecoveryState('step1')}
+                        >
+                          忘记密码？
+                        </Text>
+                      </div>
+                    </Form>
+                  ),
+                },
+                {
+                  key: 'register',
+                  label: '注册',
+                  children: (
+                    <Form form={regForm} layout="vertical" onFinish={doRegister}>
+                      <Form.Item
+                        name="username"
+                        rules={[
+                          { required: true, message: '请输入用户名' },
+                          { pattern: /^[a-zA-Z0-9_-]{3,32}$/, message: '只允许字母、数字、下划线、短横线，长度 3-32' },
+                        ]}
+                      >
+                        <Input prefix={<UserOutlined />} placeholder="用户名（3-32位）" autoComplete="username" />
+                      </Form.Item>
+                      <Form.Item
+                        name="email"
+                        rules={[{ type: 'email', message: '邮箱格式不正确' }]}
+                        extra="可选，用于邮箱验证和找回密码"
+                      >
+                        <Input prefix={<MailOutlined />} placeholder="邮箱（可选）" autoComplete="email" />
+                      </Form.Item>
+                      <Form.Item
+                        name="password"
+                        rules={[
+                          { required: true, message: '请设置密码' },
+                          { min: 8, message: '密码至少 8 位' },
+                        ]}
+                      >
+                        <Input.Password prefix={<LockOutlined />} placeholder="密码（至少 8 位）" autoComplete="new-password" />
+                      </Form.Item>
+                      <Form.Item
+                        name="security_question_key"
+                        label="安全问题"
+                        rules={[{ required: true, message: '请选择安全问题，用于找回密码' }]}
+                      >
+                        <Select placeholder="请选择安全问题" suffixIcon={<QuestionCircleOutlined />}>
+                          {SECURITY_QUESTIONS.map((q) => (
+                            <Select.Option key={q.key} value={q.key}>{q.text}</Select.Option>
+                          ))}
+                        </Select>
+                      </Form.Item>
+                      <Form.Item
+                        name="security_answer"
+                        label="答案"
+                        extra="请牢记此答案，找回密码时需要"
+                        rules={[
+                          { required: true, message: '请输入安全问题的答案' },
+                          { max: 100, message: '答案最多 100 字符' },
+                        ]}
+                      >
+                        <Input placeholder="输入安全问题的答案" autoComplete="off" />
+                      </Form.Item>
+                      <Button type="primary" block loading={loading} onClick={doRegister}>注册并登录</Button>
+                    </Form>
+                  ),
+                },
+              ]}
+            />
+          </Card>
+        </Col>
+
+        {/* 左侧：产品介绍（移动端排在登录卡片下方） */}
+        <Col xs={{ span: 24, order: 2 }} md={{ span: 14, order: 1 }} style={{
+          display: 'flex', flexDirection: 'column', justifyContent: 'center',
+          padding: '24px 32px 32px 24px',
+        }}>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{
+              display: 'inline-block',
+              fontSize: 11, fontWeight: 700, letterSpacing: 3, color: '#1677ff',
+              textTransform: 'uppercase', marginBottom: 8,
+              background: '#e6f4ff', padding: '4px 10px', borderRadius: 4,
+            }}>
+              Personal Investment Cockpit
+            </div>
+          </div>
+          <Title level={2} style={{ marginTop: 0, marginBottom: 8, fontSize: 26, fontWeight: 800, lineHeight: 1.3, color: '#141414' }}>
+            你的个人投资驾驶舱
+          </Title>
+          <Paragraph style={{ fontSize: 14, color: '#595959', marginBottom: 24, lineHeight: 1.7 }}>
+            统一管理多个券商、银行和钱包里的资产，用交易流水自动生成持仓、收益和复盘笔记。
+          </Paragraph>
+          <FeatureHighlights />
+        </Col>
+      </Row>
     </PageWrap>
   )
 }
@@ -429,8 +501,8 @@ function PageWrap({ children }) {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      background: '#f0f2f5',
-      padding: 16,
+      background: '#f6f8fb',
+      padding: '16px 12px',
     }}>
       {children}
     </div>

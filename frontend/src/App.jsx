@@ -109,7 +109,7 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem('dark', dark ? '1' : '0')
-    document.body.style.background = dark ? '#000' : '#f0f2f5'
+    document.body.style.background = dark ? '#000' : '#f6f8fb'
   }, [dark])
 
   useEffect(() => {
@@ -369,11 +369,11 @@ export default function App() {
             : '/'
 
   const navItems = [
-    { key: '/', icon: <DashboardOutlined />, label: <Link to="/">总览</Link> },
-    { key: '/platforms', icon: <AppstoreOutlined />, label: <Link to="/platforms">资产</Link> },
-    { key: '/transactions', icon: <SwapOutlined />, label: <Link to="/transactions">交易</Link> },
-    { key: '/research', icon: <FundOutlined />, label: <Link to="/research">投研</Link> },
-    { key: '/notes', icon: <ReadOutlined />, label: <Link to="/notes">笔记</Link> },
+    { key: '/', icon: <DashboardOutlined />, label: <Link to="/">投资总览</Link> },
+    { key: '/platforms', icon: <AppstoreOutlined />, label: <Link to="/platforms">账户与持仓</Link> },
+    { key: '/transactions', icon: <SwapOutlined />, label: <Link to="/transactions">交易流水</Link> },
+    { key: '/research', icon: <FundOutlined />, label: <Link to="/research">AI 投研</Link> },
+    { key: '/notes', icon: <ReadOutlined />, label: <Link to="/notes">投资笔记</Link> },
     { key: '/alerts', icon: <BellOutlined />, label: <Link to="/alerts">提醒</Link> },
   ]
 

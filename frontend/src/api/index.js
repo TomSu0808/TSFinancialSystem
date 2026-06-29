@@ -98,7 +98,7 @@ export const refreshRate = () => client.post('/fx/refresh').then((r) => r.data)
 export const getSummary = (currency) =>
   client.get('/summary', { params: { currency } }).then((r) => r.data)
 
-// ---- 投资心得 / 决策日志 ----
+// ---- 投资笔记 ----
 export const listNotes = (params) => client.get('/notes', { params }).then((r) => r.data)
 export const createNote = (data) => client.post('/notes', data).then((r) => r.data)
 export const updateNote = (id, data) => client.put(`/notes/${id}`, data).then((r) => r.data)

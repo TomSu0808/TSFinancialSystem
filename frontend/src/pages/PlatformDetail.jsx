@@ -18,8 +18,8 @@ import { useColorScheme } from '../colorScheme.jsx'
 import { useDisplaySettings, convertAmount } from '../displaySettings.jsx'
 
 const NOTE_TYPE_LABEL = {
-  thesis: '买入逻辑', risk: '风险点', review: '复盘',
-  action: '行动项', observation: '观察', general: '笔记',
+  thesis: '投资逻辑', risk: '风险点', review: '复盘笔记',
+  action: '待跟进', observation: '观察', general: '笔记',
 }
 const NOTE_TYPE_COLOR = {
   thesis: 'blue', risk: 'red', review: 'purple',

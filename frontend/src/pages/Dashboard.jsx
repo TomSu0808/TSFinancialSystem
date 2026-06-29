@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
-  Alert, Button, Card, Col, Divider, Empty, Row, Segmented, Space, Steps, Tag, Tooltip, message,
+  Alert, Button, Card, Col, Divider, Empty, Row, Segmented, Space, Steps, Tag, Tooltip, Typography, message,
 } from 'antd'
 import {
   ReloadOutlined, ArrowUpOutlined, ArrowDownOutlined,
   EditOutlined, InfoCircleOutlined, ExclamationCircleOutlined,
   CheckCircleOutlined, RightOutlined, WarningOutlined, BellOutlined,
-  ThunderboltOutlined,
+  ThunderboltOutlined, PlusOutlined, UploadOutlined,
 } from '@ant-design/icons'
+
+const { Title, Text } = Typography
 import ReactECharts from 'echarts-for-react'
 import { getSummary, getSnapshots, refreshPrices, refreshRate, getAutomationStatus, runNow, listAlertEvents } from '../api'
 import { CURRENCY_SYMBOL, CURRENCY_LABEL, ASSET_TYPE_LABEL, fmt, isMasked } from '../constants'
@@ -190,10 +192,53 @@ export default function Dashboard({ autoRefresh = false }) {
 
   return (
     <Space direction="vertical" size={16} style={{ display: 'flex' }}>
-      <Card loading={loading} bodyStyle={{ padding: 24 }}>
+      {/* 页面标题与说明 */}
+      <div style={{ marginBottom: -8 }}>
+        <Title level={3} style={{ marginTop: 0, marginBottom: 4, fontWeight: 700 }}>
+          投资总览
+        </Title>
+        <Text type="secondary" style={{ fontSize: 14 }}>
+          统一查看账户、持仓、收益、现金和 AI 投研状态
+        </Text>
+        {/* CTA 操作按钮 */}
+        <Space size={8} wrap style={{ marginTop: 16 }}>
+          <Button
+            type="default"
+            icon={<PlusOutlined />}
+            onClick={() => navigate('/platforms', { state: { openAdd: true } })}
+          >
+            创建账户
+          </Button>
+          <Button
+            type="default"
+            icon={<EditOutlined />}
+            onClick={() => navigate('/transactions', { state: { openAdd: true } })}
+          >
+            记录交易
+          </Button>
+          <Button
+            style={{ color: '#1677ff', borderColor: '#1677ff' }}
+            icon={<UploadOutlined />}
+            onClick={() => navigate('/transactions')}
+          >
+            导入交易
+          </Button>
+          <Button
+            type="primary"
+            icon={<ThunderboltOutlined />}
+            onClick={() => navigate('/research')}
+          >
+            AI 投研
+          </Button>
+        </Space>
+      </div>
+
+      <Card loading={loading} styles={{ body: { padding: 24 } }}>
         <Row gutter={[24, 24]} align="middle">
           <Col xs={24} md={15}>
-            <div style={{ color: '#8c8c8c', marginBottom: 8 }}>总资产（{CURRENCY_LABEL[displayCurrency]}）</div>
+            <div style={{ color: '#8c8c8c', marginBottom: 8, fontSize: 13, fontWeight: 500 }}>
+              总资产（{CURRENCY_LABEL[displayCurrency]}）
+            </div>
             <div style={{ fontSize: 44, fontWeight: 800, lineHeight: 1.05 }}>
               {sym}{fmt(total)}
             </div>
@@ -248,34 +293,42 @@ export default function Dashboard({ autoRefresh = false }) {
       </Card>
 
       {isNewUser && (
-        <Card title="开始使用" style={{ borderColor: '#1677ff22' }}>
-          <div style={{ marginBottom: 16, color: '#595959', fontSize: 14 }}>
-            欢迎！按以下步骤开始记录你的资产状况：
-          </div>
+        <Card
+          style={{
+            borderColor: '#1677ff22',
+            background: 'linear-gradient(135deg, #f6f8fb 0%, #e6f4ff 100%)',
+          }}
+        >
+          <Title level={5} style={{ marginTop: 0, marginBottom: 4 }}>
+            开始使用
+          </Title>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 20, fontSize: 13 }}>
+            按以下三步开始记录你的资产状况，每一步都会自动打开对应功能页面。
+          </Text>
           <Steps
             direction="vertical"
             size="small"
             current={0}
-            style={{ maxWidth: 520 }}
+            style={{ maxWidth: 560 }}
             items={[
               {
-                title: '创建第一个账户',
+                title: '创建账户 — 添加券商、银行或钱包',
                 description: (
                   <span>
-                    在「资产账户」页添加一个券商、银行或钱包账户。
+                    先在账户页添加你使用的平台，支持股票、基金、加密货币和现金账户。
                     {' '}
                     <Link to="/platforms" style={{ fontWeight: 500 }}>
-                      去添加 <RightOutlined style={{ fontSize: 11 }} />
+                      去创建 <RightOutlined style={{ fontSize: 11 }} />
                     </Link>
                   </span>
                 ),
                 status: 'process',
               },
               {
-                title: '记录第一笔交易或添加持仓',
+                title: '记录或导入交易 — 系统自动生成持仓和成本',
                 description: (
                   <span>
-                    有了账户后，记录一笔买入来建立你的第一个持仓；也可以直接手填现有资产。
+                    记录买入、卖出、入金等交易流水，平台会自动计算持仓数量和成本基准。
                     {' '}
                     <a
                       style={{ fontWeight: 500 }}
@@ -288,15 +341,20 @@ export default function Dashboard({ autoRefresh = false }) {
                 status: 'wait',
               },
               {
-                title: '回到这里查看总览',
-                description: '记录后，这里会显示你的资产分布、收益走势和今日涨跌。',
+                title: '查看总览与笔记 — 跟踪收益、配置和 AI 报告',
+                description:
+                  '有了数据之后，回到这里查看资产分布、收益走势和今日变化。也可以生成 AI 投研报告，并记录为投资笔记。',
                 status: 'wait',
               },
             ]}
           />
-          <div style={{ marginTop: 16, color: '#8c8c8c', fontSize: 12 }}>
-            还可以在「个人资料」中设置 AI Key、导出备份，保护你的数据安全。
-          </div>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginTop: 20 }}
+            message="提示"
+            description="在右上角「个人资料」中设置 AI API Key 后即可使用 AI 投研功能。也可以随时导出备份保护你的数据。"
+          />
         </Card>
       )}
 

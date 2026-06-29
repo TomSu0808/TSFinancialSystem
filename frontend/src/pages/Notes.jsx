@@ -11,10 +11,10 @@ const { Text } = Typography
 const { TextArea } = Input
 
 const NOTE_TYPES = [
-  { value: 'thesis',      label: '买入逻辑', color: 'blue' },
+  { value: 'thesis',      label: '投资逻辑', color: 'blue' },
   { value: 'risk',        label: '风险点',   color: 'red' },
-  { value: 'review',      label: '复盘',     color: 'purple' },
-  { value: 'action',      label: '行动项',   color: 'orange' },
+  { value: 'review',      label: '复盘笔记', color: 'purple' },
+  { value: 'action',      label: '待跟进',   color: 'orange' },
   { value: 'observation', label: '观察',     color: 'cyan' },
   { value: 'general',     label: '笔记',     color: 'default' },
 ]
@@ -185,7 +185,7 @@ export default function Notes() {
     <Card
       title={
         <Space>
-          <span>投资决策日志</span>
+          <span>投资笔记</span>
           {activeFilterCount > 0 && (
             <Tag color="blue">{activeFilterCount} 个筛选条件</Tag>
           )}
@@ -241,7 +241,7 @@ export default function Notes() {
       <div style={{ marginBottom: 8, color: '#888', fontSize: 12 }}>共 {data.length} 条记录</div>
 
       {data.length === 0 && !loading ? (
-        <Empty description="暂无记录，点右上角「新增」记录投资决策、复盘、风险或行动项" />
+        <Empty description="暂无记录，点右上角「新增」记录投资逻辑、风险、复盘、观察或待跟进事项" />
       ) : (
         <Row gutter={[12, 12]}>
           {data.map((note) => {
@@ -306,7 +306,7 @@ export default function Notes() {
             <Input placeholder="简短标题" />
           </Form.Item>
           <Form.Item name="content" label="内容" rules={[{ required: true, message: '请填写内容' }]}>
-            <TextArea rows={6} placeholder="自由记录投资逻辑、风险点、复盘想法或行动项…" />
+            <TextArea rows={6} placeholder="记录投资逻辑、风险点、观察、复盘或待跟进事项…" />
           </Form.Item>
           <Row gutter={8}>
             <Col xs={24} sm={12}>
@@ -333,7 +333,7 @@ export default function Notes() {
             </Col>
           </Row>
           <Text type="secondary" style={{ fontSize: 11 }}>
-            关联持仓和来源报告可从持仓页「研究记录」或投研页「生成跟踪事项」自动填入。
+            关联持仓和来源报告可从持仓页「投资笔记」或投研页「生成跟踪事项」自动填入。
           </Text>
         </Form>
       </Modal>

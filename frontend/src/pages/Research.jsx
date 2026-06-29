@@ -843,7 +843,7 @@ function ReportDetail({ report, onBack, onRefresh, onCancel, onDelete, onRetry, 
             生成跟踪事项
           </Button>
           <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>
-            提取报告「行动项」章节，保存为决策日志
+            提取报告「跟踪事项」章节，保存为投资笔记
           </Text>
         </div>
       )}
