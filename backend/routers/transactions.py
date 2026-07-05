@@ -9,6 +9,7 @@ from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from auth import get_current_user
+from cash_service import recalc_cash
 from database import get_session
 from models import (
     Currency,
@@ -22,6 +23,7 @@ from models import (
     User,
 )
 from position import recompute_holding, resolve_derived_holding
+from transaction_validation import validate_transaction
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
 
@@ -102,7 +104,7 @@ def _sync_txn_holding(session: Session, txn: Transaction, user: User) -> None:
     买入可自动建仓；卖出/分红只绑定已存在的 derived 持仓。改了 symbol/platform/currency
     会重绑到新持仓，新旧持仓都会重算。非持仓动作清空 holding_id，避免悬空 FK。
 
-    deposit / withdraw 会更新 derived cash 持仓的 manual_value（现金账本）。
+    deposit / withdraw 通过 cash_service.recalc_cash 统一重算现金余额。
     """
     affected = set()
     if txn.holding_id is not None:
@@ -119,13 +121,14 @@ def _sync_txn_holding(session: Session, txn: Transaction, user: User) -> None:
                 session.commit()
             affected.add(holding.id)
     elif txn.action in (TxnAction.deposit, TxnAction.withdraw):
-        # 现金账本：更新 derived cash 持仓
+        # 现金账本：统一重算
         if txn.holding_id is not None:
             affected.add(txn.holding_id)  # 原 buy/sell 重算
             txn.holding_id = None
             session.add(txn)
             session.commit()
-        _update_cash_holding(session, user, txn)
+        if txn.platform_id is not None and txn.currency is not None:
+            recalc_cash(session, user, txn.platform_id, txn.currency)
     else:
         if txn.holding_id is not None:
             txn.holding_id = None
@@ -133,71 +136,6 @@ def _sync_txn_holding(session: Session, txn: Transaction, user: User) -> None:
             session.commit()
     for hid in affected:
         recompute_holding(session, hid)
-
-
-def _update_cash_holding(session: Session, user: User, txn: Transaction) -> None:
-    """deposit / withdraw：更新 derived cash 持仓的 manual_value。
-
-    每个 (platform_id, currency) 维护一个 cash holding：
-    - deposit: manual_value += amount
-    - withdraw: manual_value -= amount（不低于 0）
-    - buy / sell 第一版不联动现金
-    """
-    if txn.action not in (TxnAction.deposit, TxnAction.withdraw):
-        return
-    if txn.platform_id is None:
-        return  # 没有平台的入金/出金无法归属
-
-    amount = txn.amount or 0.0
-    if amount <= 0:
-        amount = txn.quantity or 0.0
-    if amount <= 0:
-        return
-
-    # 查找或创建 cash holding
-    cash = session.exec(
-        select(Holding).where(
-            Holding.user_id == user.id,
-            Holding.platform_id == txn.platform_id,
-            Holding.currency == txn.currency,
-            Holding.asset_type == "cash",
-            Holding.source == HoldingSource.derived,
-        )
-    ).first()
-
-    if cash is None:
-        cash = Holding(
-            user_id=user.id,
-            platform_id=txn.platform_id,
-            currency=txn.currency,
-            asset_type="cash",
-            market="NONE",
-            name=f"现金余额 ({txn.currency.value})",
-            symbol="",
-            source=HoldingSource.derived,
-            status="open",
-            manual_value=0.0,
-        )
-        session.add(cash)
-        session.commit()
-        session.refresh(cash)
-
-    current_mv = cash.manual_value or 0.0
-    if txn.action == TxnAction.deposit:
-        cash.manual_value = current_mv + amount
-    else:
-        new_val = current_mv - amount
-        if new_val < -1e-9:
-            raise HTTPException(
-                400,
-                f"出金 {amount} {txn.currency.value} 超过当前现金余额 "
-                f"{current_mv} {txn.currency.value}",
-            )
-        cash.manual_value = max(new_val, 0.0)
-
-    cash.price_updated_at = _dt.utcnow()
-    session.add(cash)
-    session.commit()
 
 
 # ─── CSV import helpers ───────────────────────────────────────────────────────
@@ -395,6 +333,20 @@ def create_transaction(
     user: User = Depends(get_current_user),
 ):
     _check_platform(session, data.platform_id, user)
+    # 统一校验
+    validate_transaction(
+        session, user,
+        action=data.action,
+        platform_id=data.platform_id,
+        currency=data.currency,
+        symbol=data.symbol,
+        name=data.name,
+        quantity=data.quantity,
+        price=data.price,
+        fee=data.fee,
+        amount=data.amount,
+        date=data.date,
+    )
     txn = Transaction.model_validate(data, update={"user_id": user.id})
     txn.holding_id = None  # always system-resolved; never trust client input
     _check_oversell(session, user, txn)  # 禁止超卖
@@ -474,6 +426,23 @@ async def commit_import(
     imported = 0
     for d in all_data:
         tc = TransactionCreate(**d)
+        # 统一校验
+        try:
+            validate_transaction(
+                session, user,
+                action=tc.action,
+                platform_id=tc.platform_id,
+                currency=tc.currency,
+                symbol=tc.symbol,
+                name=tc.name,
+                quantity=tc.quantity,
+                price=tc.price,
+                fee=tc.fee,
+                amount=tc.amount,
+                date=tc.date,
+            )
+        except HTTPException:
+            raise  # 向上传播校验错误
         txn = Transaction.model_validate(tc, update={"user_id": user.id})
         txn.holding_id = None
         _check_oversell(session, user, txn)  # CSV 导入也禁止超卖
@@ -500,6 +469,22 @@ def update_transaction(
         _check_platform(session, values["platform_id"], user)
     for key, value in values.items():
         setattr(txn, key, value)
+
+    # 统一校验（合并后的字段）
+    validate_transaction(
+        session, user,
+        action=txn.action,
+        platform_id=txn.platform_id,
+        currency=txn.currency,
+        symbol=txn.symbol,
+        name=txn.name,
+        quantity=txn.quantity,
+        price=txn.price,
+        fee=txn.fee,
+        amount=txn.amount,
+        date=txn.date,
+        exclude_txn_id=txn_id,
+    )
     _check_oversell(session, user, txn, exclude_txn_id=txn_id)  # 禁止超卖
     session.add(txn)
     session.commit()
@@ -517,8 +502,14 @@ def delete_transaction(
 ):
     txn = _owned(session, txn_id, user)
     holding_id = txn.holding_id
+    action = txn.action
+    platform_id = txn.platform_id
+    currency = txn.currency
     session.delete(txn)
     session.commit()
     if holding_id is not None:
         recompute_holding(session, holding_id)
+    # 删除 deposit/withdraw 后重算现金
+    if action in (TxnAction.deposit, TxnAction.withdraw) and platform_id is not None and currency is not None:
+        recalc_cash(session, user, platform_id, currency)
     return {"ok": True}

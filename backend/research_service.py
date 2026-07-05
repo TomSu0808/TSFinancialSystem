@@ -304,7 +304,11 @@ def create_run(
         )
         report.provider_response_id = response_id
         report.started_at = datetime.utcnow()
-        response = ai_client.retrieve_response(response_id)
+        response = ai_client.retrieve_response(
+            response_id,
+            api_key=user_api_key,
+            provider=provider,
+        )
         if ai_client.is_response_complete(response):
             text = ai_client.extract_output_text(response)
             sources = ai_client.extract_sources(response)

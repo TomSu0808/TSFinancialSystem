@@ -56,6 +56,11 @@ def create_holding(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
+    if data.source == HoldingSource.derived:
+        raise HTTPException(
+            400,
+            "不允许手动创建 derived 持仓。derived 持仓只能由交易流水自动生成。",
+        )
     _check_platform(session, data.platform_id, user)
     holding = Holding.model_validate(data, update={"user_id": user.id})
     session.add(holding)

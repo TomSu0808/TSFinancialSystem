@@ -9,8 +9,10 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from fastapi import HTTPException
 from sqlmodel import Session, select
 
+from cash_service import recalc_cash
 from importers import BROKER_IMPORTERS, BaseImporter, ImportedTransactionDraft
 from models import (
     Currency,
@@ -24,6 +26,7 @@ from models import (
     User,
 )
 from position import recompute_holding, resolve_derived_holding
+from transaction_validation import validate_transaction
 
 
 def _platforms_by_name(session: Session, user: User) -> dict:
@@ -285,6 +288,9 @@ def commit_import(
     error_details = []
     created_txn_ids = []
 
+    # 收集需要重算现金的 (platform_id, currency) 对
+    cash_recalc_keys = set()
+
     for row in rows:
         rn = row["row_number"]
 
@@ -326,6 +332,25 @@ def commit_import(
             error_details.append({"row": rn, "error": f"无效的 currency: {data.get('currency')}"})
             continue
 
+        # 统一字段校验
+        try:
+            validate_transaction(
+                session, user,
+                action=action,
+                platform_id=pid,
+                currency=currency,
+                symbol=data.get("symbol", ""),
+                name=data.get("name", ""),
+                quantity=data.get("quantity"),
+                price=data.get("price"),
+                fee=data.get("fee"),
+                amount=data.get("amount"),
+                date=data.get("date", ""),
+            )
+        except HTTPException as e:
+            error_details.append({"row": rn, "error": e.detail})
+            continue
+
         # 创建 Transaction
         try:
             txn = Transaction(
@@ -360,8 +385,16 @@ def commit_import(
             session.commit()
             continue
 
+        # 收集现金重算维度
+        if action in (TxnAction.deposit, TxnAction.withdraw) and pid is not None and currency is not None:
+            cash_recalc_keys.add((pid, currency))
+
         created_txn_ids.append(txn.id)
         created += 1
+
+    # 统一重算受影响的现金余额
+    for (pid, cur) in cash_recalc_keys:
+        recalc_cash(session, user, pid, cur)
 
     # 更新 ImportSession
     imp_session.status = "committed"
@@ -380,7 +413,10 @@ def commit_import(
 
 
 def _sync_txn_holding(session, txn, user):
-    """本地导入：复用 transactions router 的同名函数逻辑。"""
+    """本地导入：复用 transactions router 的同名函数逻辑。
+
+    deposit / withdraw 不再手动增减 manual_value，而是由 recalc_cash 统一重算。
+    """
     from position import recompute_holding, resolve_derived_holding
 
     affected = set()
@@ -399,13 +435,13 @@ def _sync_txn_holding(session, txn, user):
                 session.commit()
             affected.add(holding.id)
     elif txn.action in (TxnAction.deposit, TxnAction.withdraw):
-        # 现金账本：更新 derived cash holding
+        # 现金：只清空 holding_id，不做手动增减
         if txn.holding_id is not None:
             affected.add(txn.holding_id)
             txn.holding_id = None
             session.add(txn)
             session.commit()
-        _update_cash_holding(session, user, txn)
+        # 现金重算在 commit_import 结尾统一做，此处不单独调 recalc_cash
     else:
         if txn.holding_id is not None:
             txn.holding_id = None
@@ -414,71 +450,3 @@ def _sync_txn_holding(session, txn, user):
 
     for hid in affected:
         recompute_holding(session, hid)
-
-
-def _update_cash_holding(session, user, txn):
-    """deposit / withdraw：更新 derived cash 持仓的 manual_value。
-
-    每个 (platform_id, currency) 维护一个 cash holding：
-    - deposit: manual_value += amount
-    - withdraw: manual_value -= amount（不低于 0）
-    - buy / sell 第一版不联动现金
-    """
-    if txn.action not in (TxnAction.deposit, TxnAction.withdraw):
-        return
-    if txn.platform_id is None:
-        return  # 没有平台的入金/出金无法归属
-
-    amount = txn.amount or 0.0
-    if amount <= 0:
-        # 尝试从 quantity 取
-        amount = txn.quantity or 0.0
-
-    if amount <= 0:
-        return  # 无效金额，跳过
-
-    # 查找现有 cash holding
-    cash = session.exec(
-        select(Holding).where(
-            Holding.user_id == user.id,
-            Holding.platform_id == txn.platform_id,
-            Holding.currency == txn.currency,
-            Holding.asset_type == "cash",
-            Holding.source == HoldingSource.derived,
-        )
-    ).first()
-
-    if cash is None:
-        # 创建 cash holding
-        cash = Holding(
-            user_id=user.id,
-            platform_id=txn.platform_id,
-            currency=txn.currency,
-            asset_type="cash",
-            market="NONE",
-            name=f"现金余额 ({txn.currency.value})",
-            symbol="",
-            source=HoldingSource.derived,
-            status="open",
-            manual_value=0.0,
-        )
-        session.add(cash)
-        session.commit()
-        session.refresh(cash)
-
-    current_mv = cash.manual_value or 0.0
-
-    if txn.action == TxnAction.deposit:
-        cash.manual_value = current_mv + amount
-    elif txn.action == TxnAction.withdraw:
-        new_val = current_mv - amount
-        if new_val < -1e-9:
-            raise ValueError(
-                f"出金 {amount} {txn.currency.value} 超过当前现金余额 "
-                f"{current_mv} {txn.currency.value}"
-            )
-        cash.manual_value = max(new_val, 0.0)
-
-    cash.price_updated_at = datetime.utcnow()
-    session.add(cash)
-    session.commit()

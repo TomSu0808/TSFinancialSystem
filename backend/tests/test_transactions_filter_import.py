@@ -229,7 +229,7 @@ def test_csv_commit_all_valid_imports(client):
     _platform(client, "富途")
     csv_content = _csv([
         "2026-01-01,buy,Apple,AAPL,富途,USD,100,10,,,",
-        "2026-02-01,deposit,,,, CNY,,,, 5000,入金",
+        "2026-02-01,deposit,,,富途, CNY,,,, 5000,入金",
     ])
     r = client.post("/api/transactions/import/commit",
                     files={"file": ("t.csv", csv_content, "text/csv")})
@@ -272,13 +272,10 @@ def test_csv_commit_buy_sell_syncs_correctly(client):
 
 
 def test_csv_commit_without_platform_column(client):
-    """platform 列为空时应正常导入，不绑定平台。"""
+    """deposit/withdraw 缺少 platform 时应被拒绝（v0.1.1 校验增强）。"""
     csv_content = _csv([
         "2026-01-01,deposit,,,,CNY,,,, 1000,",
     ])
     r = client.post("/api/transactions/import/commit",
                     files={"file": ("t.csv", csv_content, "text/csv")})
-    assert r.status_code == 200
-    txns = client.get("/api/transactions").json()
-    assert len(txns) == 1
-    assert txns[0]["platform_id"] is None
+    assert r.status_code == 400

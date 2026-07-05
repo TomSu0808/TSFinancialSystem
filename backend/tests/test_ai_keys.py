@@ -498,3 +498,44 @@ def test_cancel_uses_byok_key(engine_byok, user_byok):
         assert kwargs.get("api_key") == "sk-cancel-test-key123456"
         assert kwargs.get("provider") == "gpt"
     client.app.dependency_overrides.clear()
+
+
+# ── BYOK 初次 retrieve 传入 api_key/provider 测试 ──────────────────────
+
+def test_create_run_first_retrieve_uses_byok_key(engine_byok, user_byok):
+    """初次 retrieve_response 必须传入用户的 api_key 和 provider（BYOK 修复）。"""
+    client = _make_client(engine_byok, user_byok)
+
+    # 保存 BYOK key
+    client.post("/api/settings/ai-keys", json={
+        "provider": "deepseek",
+        "api_key": "sk-first-retrieve-test-key",
+        "is_default": True,
+    })
+
+    captured_retrieve = {}
+
+    def mock_start_research(prompt, use_web_search, provider, model, api_key=None, base_url=None):
+        return "sync-deepseek-first-retrieve"
+
+    def mock_retrieve_response(response_id, api_key=None, provider=None):
+        captured_retrieve["api_key"] = api_key
+        captured_retrieve["provider"] = provider
+        captured_retrieve["response_id"] = response_id
+        return MagicMock(status="completed", output_text="Report from BYOK", sources=[])
+
+    with patch("ai_client.start_research", side_effect=mock_start_research), \
+         patch("ai_client.retrieve_response", side_effect=mock_retrieve_response):
+        resp = client.post("/api/research/runs", json={
+            "template_key": "investment-research",
+            "target_name": "测试公司",
+            "ai_provider": "deepseek",
+        })
+
+    assert resp.status_code == 200, resp.text
+    # 关键断言：初次 retrieve 必须传入 api_key 和 provider
+    assert captured_retrieve.get("api_key") == "sk-first-retrieve-test-key", \
+        f"Expected BYOK api_key in first retrieve, got: {captured_retrieve.get('api_key')}"
+    assert captured_retrieve.get("provider") == "deepseek", \
+        f"Expected 'deepseek' provider in first retrieve, got: {captured_retrieve.get('provider')}"
+    client.app.dependency_overrides.clear()

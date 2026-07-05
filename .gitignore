@@ -18,6 +18,11 @@ frontend/dist/
 # Playwright MCP session artifacts
 .playwright-mcp/
 
+# Local assistant / indexing tool state
+.claude/
+.codegraph/
+.mcp.json
+
 # Editor / OS
 .vscode/
 .DS_Store
