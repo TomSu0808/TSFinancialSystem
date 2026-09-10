@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
-  Alert, Button, Card, Col, Divider, Empty, Row, Segmented, Space, Steps, Tag, Tooltip, Typography, message,
+  Alert, Button, Card, Col, Divider, Empty, Radio, Row, Segmented, Space, Steps, Tag, Tooltip, Typography, message,
 } from 'antd'
 import {
   ReloadOutlined, ArrowUpOutlined, ArrowDownOutlined,
@@ -12,7 +12,7 @@ import {
 
 const { Title, Text } = Typography
 import ReactECharts from 'echarts-for-react'
-import { getSummary, getSnapshots, refreshPrices, refreshRate, getAutomationStatus, runNow, listAlertEvents } from '../api'
+import { getSummary, getSnapshots, refreshPrices, refreshRate, getAutomationStatus, runNow, listAlertEvents, getPortfolioSummary } from '../api'
 import { CURRENCY_SYMBOL, CURRENCY_LABEL, ASSET_TYPE_LABEL, fmt, isMasked } from '../constants'
 import { useColorScheme } from '../colorScheme.jsx'
 import { useDisplaySettings } from '../displaySettings.jsx'
@@ -40,26 +40,60 @@ export default function Dashboard({ autoRefresh = false }) {
   const [automationStatus, setAutomationStatus] = useState(null)
   const [unreadAlerts, setUnreadAlerts] = useState([])
   const [runningNow, setRunningNow] = useState(false)
+  const RANGE_OPTIONS = [
+    { value: 'max', label: '最大' },
+    { value: '1y', label: '1年' },
+    { value: '6m', label: '半年' },
+    { value: '3m', label: '3个月' },
+    { value: '1m', label: '1个月' },
+    { value: '1w', label: '1周' },
+  ]
+  const [snapRange, setSnapRange] = useState(() => localStorage.getItem('snapshotRange') || '6m')
+  const [snapsLoading, setSnapsLoading] = useState(false)
+  const [snapsError, setSnapsError] = useState(null)
+  const [portfolioSummary, setPortfolioSummary] = useState(null)
+  const snapSeq = useRef(0)
+  const snapRangeRef = useRef(snapRange)
+
+  const loadSnapshots = useCallback(async (range) => {
+    const seq = ++snapSeq.current
+    setSnapsLoading(true)
+    setSnapsError(null)
+    try {
+      const snaps = await getSnapshots({ range })
+      if (seq === snapSeq.current) setSnapshots(snaps)
+    } catch (e) {
+      if (seq === snapSeq.current) setSnapsError(e.message)
+    } finally {
+      if (seq === snapSeq.current) setSnapsLoading(false)
+    }
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [s, snaps] = await Promise.all([getSummary(displayCurrency), getSnapshots(180)])
+      const s = await getSummary(displayCurrency)   // summary 会 upsert 当日快照
       setSummary(s)
-      setSnapshots(snaps)
     } catch (e) {
       message.error('加载汇总失败：' + e.message)
     } finally {
       setLoading(false)
     }
-    // 异步加载自动化状态和未读提醒（不影响主流程）
+    await loadSnapshots(snapRangeRef.current)       // 快照必须在 summary 之后读取
     getAutomationStatus().then(setAutomationStatus).catch(() => {})
     listAlertEvents({ status: 'unread', limit: 3 }).then(setUnreadAlerts).catch(() => {})
-  }, [displayCurrency])
+    getPortfolioSummary().then(setPortfolioSummary).catch(() => {})
+  }, [displayCurrency, loadSnapshots])
 
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    snapRangeRef.current = snapRange
+    localStorage.setItem('snapshotRange', snapRange)
+    loadSnapshots(snapRange)
+  }, [snapRange, loadSnapshots])
 
   const doRefresh = async () => {
     setRefreshing(true)
@@ -577,11 +611,35 @@ export default function Dashboard({ autoRefresh = false }) {
         </Card>
       )}
 
-      <Card loading={loading} title="总资产走势">
-        {snapshots.length > 1 ? (
-          <ReactECharts option={trendOption} style={{ height: 320 }} notMerge />
+      <Card
+        loading={loading || snapsLoading}
+        title="总资产走势"
+        extra={
+          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <Radio.Group
+              size="small"
+              optionType="button"
+              buttonStyle="solid"
+              value={snapRange}
+              onChange={(e) => setSnapRange(e.target.value)}
+              options={RANGE_OPTIONS}
+            />
+          </div>
+        }
+      >
+        {snapsError ? (
+          <Empty description={`走势加载失败：${snapsError}`} />
+        ) : snapshots.length === 0 ? (
+          <Empty description="该时间范围内暂无净值记录" />
         ) : (
-          <Empty description="走势需要至少 2 天数据；每天打开总览会自动记录一个净值点" />
+          <>
+            <ReactECharts option={trendOption} style={{ height: 320 }} notMerge />
+            <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
+              {snapshots.length === 1
+                ? `仅有 1 个净值点（${snapshots[0].day}）`
+                : `实际数据范围：${snapshots[0].day} ~ ${snapshots[snapshots.length - 1].day}`}
+            </Text>
+          </>
         )}
       </Card>
 

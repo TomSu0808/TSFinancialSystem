@@ -105,8 +105,12 @@ export const updateNote = (id, data) => client.put(`/notes/${id}`, data).then((r
 export const deleteNote = (id) => client.delete(`/notes/${id}`).then((r) => r.data)
 
 // ---- 净值走势 ----
-export const getSnapshots = (days = 90) =>
-  client.get('/snapshots', { params: { days } }).then((r) => r.data)
+export const getSnapshots = (params = {}) =>
+  client.get('/snapshots', { params }).then((r) => r.data)
+
+// ---- 全账户 AI 分析摘要 ----
+export const getPortfolioSummary = () =>
+  client.get('/research/portfolio-summary').then((r) => r.data)
 
 // ---- 交易记录 ----
 export const listTransactions = (params) =>
