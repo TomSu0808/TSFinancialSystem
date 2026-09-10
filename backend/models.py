@@ -393,6 +393,7 @@ class ResearchRunCreate(SQLModel):
     ai_model: Optional[str] = None
     extra_instruction: Optional[str] = None
     use_web_search: bool = True
+    display_currency: Currency = Currency.CNY
 
 
 class ResearchReportCreate(SQLModel):

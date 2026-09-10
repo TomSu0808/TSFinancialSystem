@@ -12,6 +12,7 @@ from ai_berkshire_loader import load_skill, get_skill_meta
 from config import ALLOW_SYSTEM_AI_FALLBACK
 from crypto_utils import decrypt_secret
 from models import Holding, HoldingStatus, Platform, ResearchReport, User, UserAIKey, Currency, cost_basis, market_value, profit
+import portfolio_context
 import research_prompt_builder
 
 _EN_TEMPLATE_TITLES = {
@@ -186,6 +187,7 @@ def create_run(
     ai_model: Optional[str],
     extra_instruction: Optional[str],
     use_web_search: bool,
+    display_currency: Currency = Currency.CNY,
 ) -> ResearchReport:
     # 1. Load AI Berkshire skill markdown (raises ValueError / FileNotFoundError)
     skill_md = load_skill(template_key)
@@ -234,13 +236,7 @@ def create_run(
     is_portfolio = template_key == "portfolio-review"
     input_context_md = ""
     if is_portfolio:
-        holdings = list(session.exec(
-            select(Holding).where(
-                Holding.user_id == user.id,
-                Holding.status != HoldingStatus.closed,
-            )
-        ).all())
-        input_context_md = _portfolio_context(holdings, session)
+        input_context_md = portfolio_context.build_account_context(session, user, display_currency)
     elif holding:
         input_context_md = _holding_context(holding, session)
 
@@ -259,6 +255,7 @@ def create_run(
         portfolio_ctx=input_context_md if is_portfolio else "",
         report_language=report_language,
         extra_instruction=extra_instruction or "",
+        is_portfolio=is_portfolio,
     )
 
     # 8. Generate title

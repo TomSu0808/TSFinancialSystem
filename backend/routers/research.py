@@ -153,6 +153,7 @@ def create_run(
             ai_model=data.ai_model,
             extra_instruction=data.extra_instruction,
             use_web_search=data.use_web_search,
+            display_currency=data.display_currency,
         )
     except AIServiceNotConfigured as exc:
         raise HTTPException(400, str(exc))
@@ -238,6 +239,39 @@ def list_reports(
     return session.exec(stmt.order_by(ResearchReport.updated_at.desc())).all()
 
 
+@router.get("/portfolio-summary")
+def portfolio_summary(
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """返回最新成功组合报告的派生摘要，供首页总览卡片使用。"""
+    reports = session.exec(
+        select(ResearchReport).where(
+            ResearchReport.user_id == user.id,
+            ResearchReport.template_key == "portfolio-review",
+            ResearchReport.status == "completed",
+        ).order_by(ResearchReport.updated_at.desc()).limit(20)
+    ).all()
+    report = next((r for r in reports if r.report_md), None)
+    if not report:
+        return {"report": None}
+    conclusions = _extract_bullets(report.report_md, ("结论摘要", "Summary"))
+    risks = _extract_bullets(report.report_md, ("主要风险", "Key Risks"))
+    actions = _extract_bullets(report.report_md, ("行动项", "Action Items"))
+    return {
+        "report": {
+            "id": report.id,
+            "title": report.title,
+            "as_of": (report.completed_at or report.created_at).isoformat(),
+            "status": report.status,
+            "conclusions": conclusions[:3],
+            "risks": risks[:5],
+            "actions": actions[:5],
+            "degraded": not conclusions,
+        }
+    }
+
+
 @router.get("/reports/{report_id}", response_model=ResearchReport)
 def get_report(
     report_id: int,
@@ -303,26 +337,32 @@ def delete_report(
     return {"ok": True}
 
 
-def _extract_action_items(report_md: str) -> List[str]:
-    """从报告 Markdown 中提取行动项清单（支持中文"行动项"和英文"Action Items"）。"""
-    heading_re = re.compile(r'^#{1,3}\s+(行动项|Action\s+Items)\s*$', re.IGNORECASE)
+def _extract_bullets(md: str, headings: tuple) -> List[str]:
+    """提取给定标题（如「行动项」「主要风险」）下的清单条目。"""
+    heading_re = re.compile(
+        r'^#{1,3}\s+(' + "|".join(re.escape(x) for x in headings) + r')\s*$',
+        re.IGNORECASE,
+    )
     next_heading_re = re.compile(r'^#{1,3}\s+')
-    list_item_re = re.compile(r'^\s*(?:[-*+]|\d+\.)\s+(.+)')
-
+    list_re = re.compile(r'^\s*(?:[-*+]|\d+\.)\s+(.+)')
     in_section = False
-    items: List[str] = []
-    for line in report_md.splitlines():
-        stripped = line.strip()
-        if heading_re.match(stripped):
+    out: List[str] = []
+    for line in md.splitlines():
+        s = line.strip()
+        if heading_re.match(s):
             in_section = True
             continue
         if in_section:
-            if next_heading_re.match(stripped) and not heading_re.match(stripped):
+            if next_heading_re.match(s) and not heading_re.match(s):
                 break
-            m = list_item_re.match(line)
+            m = list_re.match(line)
             if m:
-                items.append(m.group(1).strip())
-    return items
+                out.append(m.group(1).strip())
+    return out
+
+
+def _extract_action_items(report_md: str) -> List[str]:
+    return _extract_bullets(report_md, ("行动项", "Action Items"))
 
 
 @router.post("/reports/{report_id}/tracking-notes")

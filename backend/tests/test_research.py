@@ -677,6 +677,67 @@ def test_portfolio_review_empty_holdings(engine2, user_a):
     client.app.dependency_overrides.clear()
 
 
+def _seed_report(session, user_id, template_key="portfolio-review", status="completed",
+                 report_md=None, updated_at=None):
+    from models import ResearchReport
+    from datetime import datetime
+    r = ResearchReport(
+        user_id=user_id, template_key=template_key, title="组合复盘", target_name="组合",
+        status=status, report_md=report_md, updated_at=updated_at or datetime.utcnow(),
+    )
+    session.add(r)
+    session.commit()
+    session.refresh(r)
+    return r.id
+
+
+def test_portfolio_summary_extracts_sections(engine2, user_a):
+    from models import ResearchReport
+    client = _make_client(engine2, user_a)
+    with Session(engine2) as s:
+        _seed_report(s, user_a.id, report_md=(
+            "## 结论摘要\n- 第一条结论\n- 第二条\n- 第三条\n\n"
+            "## 主要风险\n- 集中度风险\n\n## 行动项\n- 减仓 A\n"
+        ))
+    r = client.get("/api/research/portfolio-summary")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["report"] is not None
+    assert body["report"]["conclusions"] == ["第一条结论", "第二条", "第三条"]
+    assert body["report"]["risks"] == ["集中度风险"]
+    assert body["report"]["actions"] == ["减仓 A"]
+    client.app.dependency_overrides.clear()
+
+
+def test_portfolio_summary_empty_when_no_report(engine2, user_a):
+    client = _make_client(engine2, user_a)
+    r = client.get("/api/research/portfolio-summary")
+    assert r.status_code == 200
+    assert r.json()["report"] is None
+    client.app.dependency_overrides.clear()
+
+
+def test_create_run_portfolio_uses_new_context(engine2, user_a):
+    from models import Platform, Holding
+    client = _make_client(engine2, user_a)
+    with Session(engine2) as s:
+        p = Platform(user_id=user_a.id, name="P"); s.add(p); s.commit(); s.refresh(p)
+        s.add(Holding(user_id=user_a.id, platform_id=p.id, name="茅台", symbol="600519",
+                      market="A", quantity=10, current_price=100))
+        s.commit()
+    with patch("research_service.ALLOW_SYSTEM_AI_FALLBACK", True), \
+         patch("ai_client.is_configured", return_value=True), \
+         patch("ai_client.start_research", return_value="mock-id-pf"):
+        resp = client.post("/api/research/runs", json={
+            "template_key": "portfolio-review",
+            "display_currency": "USD",
+        })
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert "展示币种：USD" in (data["input_context_md"] or "")
+    client.app.dependency_overrides.clear()
+
+
 def test_portfolio_review_single_currency_no_fx_needed(engine2, user_a):
     """只有 CNY 持仓时，不需要复杂折算，但应标注 CNY 口径。"""
     from models import Platform, Holding
