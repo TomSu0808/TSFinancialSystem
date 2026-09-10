@@ -66,7 +66,7 @@ def build_account_context(session: Session, user: User, display_currency: Curren
         mv_cny = mv_native * rate
         cb_cny = cb * rate if cb is not None else None
         pnl_cny = pnl * rate if pnl is not None else None
-        if h.status == HoldingStatus.open:
+        if h.status == HoldingStatus.open and _valued(h):
             total_cny += mv_cny
             if cb_cny is not None:
                 cost_cny += cb_cny
@@ -79,7 +79,8 @@ def build_account_context(session: Session, user: User, display_currency: Curren
         })
 
     def to_display(cny: float) -> float:
-        return cny if display_currency == Currency.CNY else (cny / usdcny if usdcny else 0.0)
+        rate = to_cny.get(display_currency, 1.0)
+        return cny / rate if rate else 0.0
 
     cur_label = display_currency.value
 

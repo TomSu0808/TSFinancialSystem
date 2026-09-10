@@ -104,3 +104,23 @@ def test_cash_and_hkd_disclaimers(client, session, user):
     ctx = build_account_context(session, user, Currency.CNY)
     assert "7.8" in ctx  # HKD 近似折算标注
     assert "入金" in ctx or "现金" in ctx  # 现金口径说明
+
+
+def test_missing_price_not_counted_as_aggregate_loss(client, session, user):
+    _mk(session, user, quantity=10, cost_price=50, current_price=None)  # 缺现价：成本 500
+    _mk(session, user, market="US", symbol="AAPL", name="Apple", quantity=10, current_price=100)
+    from portfolio_context import build_account_context
+    ctx = build_account_context(session, user, Currency.CNY)
+    assert "未知（缺现价）" in ctx  # 明细中显式标注
+    assert "-500" not in ctx  # 缺价持仓不并入汇总，避免误报 -100% 亏损
+
+
+def test_hkd_display_currency(client, session, user):
+    session.add(FxRate(pair="USDCNY", rate=7.8, updated_at=datetime.utcnow()))
+    session.commit()
+    _mk(session, user, currency="HKD", market="HK", symbol="0700", name="腾讯",
+        quantity=100, current_price=100)  # 10,000 HKD
+    from portfolio_context import build_account_context
+    ctx = build_account_context(session, user, Currency.HKD)
+    assert "展示币种：HKD" in ctx
+    assert "10,000" in ctx  # 展示币种为 HKD 时总资产≈10,000 HKD
