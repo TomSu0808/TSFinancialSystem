@@ -137,6 +137,35 @@ def _research_loop_requirements(lang: str) -> str:
     )
 
 
+def _portfolio_loop_requirements(lang: str) -> str:
+    if lang == "en":
+        return (
+            "## Portfolio Output Requirements\n\n"
+            "The report **MUST** include the following sections as Level 2 headings (`##`):\n\n"
+            "1. **## Summary** — 3 bullet points on the portfolio's state, key issues, and priority actions.\n"
+            "2. **## Account & Allocation Analysis** — accounts, asset types, currency exposure, concentration, cash status.\n"
+            "3. **## Holding Recommendations** — a GFM table with columns: "
+            "Holding | Account/Cross-account | Weight | Recommendation | Rationale | Trigger or To-Verify.\n"
+            "4. **## Core Assumptions** — assumptions and unstated investor preferences.\n"
+            "5. **## Key Risks** — risks and their impact paths.\n"
+            "6. **## Questions to Verify** — missing data, cash needs, external facts.\n"
+            "7. **## Tracking Metrics** — observable metrics and review timing.\n"
+            "8. **## Action Items** — bullet list, each starting with `- `.\n"
+        )
+    return (
+        "## 组合输出要求\n\n"
+        "报告**必须**包含以下章节，使用二级 Markdown 标题（`##`）：\n\n"
+        "1. **## 结论摘要** — 用 3 条要点说明组合现状、主要问题和优先行动。\n"
+        "2. **## 账户与配置分析** — 各账户、资产类型、币种分布、集中度和现金状态。\n"
+        "3. **## 持仓建议** — 使用表格：`标的 | 账户/跨账户合计 | 当前权重 | 建议 | 依据 | 触发条件或待核实事项`。\n"
+        "4. **## 核心假设** — 列出支撑建议的假设和尚未提供的用户偏好。\n"
+        "5. **## 主要风险** — 风险及其影响路径，区分已知风险与需验证判断。\n"
+        "6. **## 待验证问题** — 会改变结论的缺失数据、资金需求或外部事实。\n"
+        "7. **## 跟踪指标** — 与建议对应的可观察指标和复查时机。\n"
+        "8. **## 行动项** — 必须使用以 `- ` 开头的清单，每条写明对象、动作、理由和触发条件。\n"
+    )
+
+
 def _disclaimer(lang: str) -> str:
     return _DISCLAIMER_EN if lang == "en" else _DISCLAIMER_ZH
 
@@ -150,6 +179,7 @@ def build_prompt(
     portfolio_ctx: str = "",
     report_language: str = "zh",
     extra_instruction: str = "",
+    is_portfolio: bool = False,
 ) -> str:
     """Assemble the final prompt for the AI provider.
 
@@ -206,7 +236,7 @@ def build_prompt(
         f"{_lang_block(report_language)}\n\n"
         f"{_format_requirements(report_language)}\n\n"
         f"{_source_requirements(report_language)}\n\n"
-        f"{_research_loop_requirements(report_language)}"
+        f"{_portfolio_loop_requirements(report_language) if is_portfolio else _research_loop_requirements(report_language)}"
         f"{extra_block}"
         f"{_disclaimer(report_language)}\n\n"
         f"{final_language_guard}\n\n"

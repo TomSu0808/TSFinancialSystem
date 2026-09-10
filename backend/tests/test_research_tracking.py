@@ -250,3 +250,29 @@ def test_prompt_action_items_bullet_requirement_en():
         skill_md="test", target_name="X", report_language="en"
     )
     assert "bullet list" in prompt
+
+
+# ─── Prompt 组合专用输出章节 ──────────────────────────────────────────────────
+
+def test_prompt_portfolio_has_account_and_holding_sections():
+    import research_prompt_builder
+    prompt = research_prompt_builder.build_prompt(
+        skill_md="# Skill\nContent",
+        target_name="组合",
+        report_language="zh",
+        is_portfolio=True,
+    )
+    for keyword in ["账户与配置分析", "持仓建议", "标的", "触发条件", "行动项"]:
+        assert keyword in prompt, f"组合 prompt 缺少：{keyword}"
+
+
+def test_prompt_non_portfolio_keeps_generic_sections():
+    import research_prompt_builder
+    prompt = research_prompt_builder.build_prompt(
+        skill_md="# Skill\nContent",
+        target_name="腾讯",
+        report_language="zh",
+        is_portfolio=False,
+    )
+    assert "账户与配置分析" not in prompt  # 单公司模板不含组合专用章节
+    assert "结论摘要" in prompt
