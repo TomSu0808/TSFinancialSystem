@@ -145,6 +145,12 @@ FinancialSystem/
 | GET | /api/backup/export | 导出整账 JSON |
 | POST | /api/backup/import | 导入（覆盖式，清空再重建）|
 
+### 接口变更（全账户 AI 分析 / 走势时间范围）
+
+- `GET /api/snapshots` 新增可选 `range`（max/1y/6m/3m/1m/1w），旧 `days` 保留；两者同传时 `range` 优先。
+- `GET /api/research/portfolio-summary` 返回最新成功组合报告的派生摘要（结论/风险/行动）。
+- `POST /api/research/runs` 新增可选 `display_currency`，用于 portfolio-review 的展示币种。
+
 ---
 
 ## 6. 关键数据流
