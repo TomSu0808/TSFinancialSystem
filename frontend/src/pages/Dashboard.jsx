@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
-  Alert, Button, Card, Col, Divider, Empty, Radio, Row, Segmented, Space, Steps, Tag, Tooltip, Typography, message,
+  Alert, Button, Card, Collapse, Col, Divider, Empty, Radio, Row, Segmented, Space, Steps, Tag, Tooltip, Typography, message,
 } from 'antd'
 import {
   ReloadOutlined, ArrowUpOutlined, ArrowDownOutlined,
   EditOutlined, InfoCircleOutlined, ExclamationCircleOutlined,
   CheckCircleOutlined, RightOutlined, WarningOutlined, BellOutlined,
-  ThunderboltOutlined, PlusOutlined, UploadOutlined,
+  ThunderboltOutlined, PlusOutlined, UploadOutlined, RobotOutlined,
 } from '@ant-design/icons'
 
 const { Title, Text } = Typography
@@ -263,6 +263,13 @@ export default function Dashboard({ autoRefresh = false }) {
             onClick={() => navigate('/research')}
           >
             AI 投研
+          </Button>
+          <Button
+            type="primary"
+            icon={<RobotOutlined />}
+            onClick={() => navigate('/research?preset=portfolio-review')}
+          >
+            AI 分析全部账户
           </Button>
         </Space>
       </div>
@@ -608,6 +615,63 @@ export default function Dashboard({ autoRefresh = false }) {
               </div>
             ))}
           </Space>
+        </Card>
+      )}
+
+      {portfolioSummary && portfolioSummary.report && (
+        <Card
+          size="small"
+          title={<Space><RobotOutlined style={{ color: '#1677ff' }} />全账户 AI 分析</Space>}
+          extra={
+            <Space size={8}>
+              <Button size="small" onClick={() => navigate(`/research?report_id=${portfolioSummary.report.id}`)}>
+                查看完整报告
+              </Button>
+              <Button size="small" type="primary" onClick={() => navigate('/research?preset=portfolio-review')}>
+                重新分析
+              </Button>
+            </Space>
+          }
+        >
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            数据时点：{(portfolioSummary.report.as_of || '').slice(0, 16).replace('T', ' ')}
+          </Text>
+          {portfolioSummary.report.degraded ? (
+            <div style={{ marginTop: 8, fontSize: 13, color: '#8c8c8c' }}>
+              摘要无法可靠提取，请点击「查看完整报告」。
+            </div>
+          ) : (
+            <Collapse
+              ghost
+              size="small"
+              defaultActiveKey={masked ? [] : ['summary']}
+              items={[
+                {
+                  key: 'summary',
+                  label: '核心结论',
+                  children: (
+                    <>
+                      <ul style={{ margin: 0, paddingLeft: 20 }}>
+                        {portfolioSummary.report.conclusions.map((c, i) => (
+                          <li key={i} style={{ fontSize: 13 }}>{c}</li>
+                        ))}
+                      </ul>
+                      {portfolioSummary.report.risks?.length > 0 && (
+                        <div style={{ marginTop: 6, fontSize: 13, color: '#595959' }}>
+                          主要风险：{portfolioSummary.report.risks.join('；')}
+                        </div>
+                      )}
+                      {portfolioSummary.report.actions?.length > 0 && (
+                        <div style={{ marginTop: 6, fontSize: 13, color: '#595959' }}>
+                          优先行动：{portfolioSummary.report.actions.join('；')}
+                        </div>
+                      )}
+                    </>
+                  ),
+                },
+              ]}
+            />
+          )}
         </Card>
       )}
 
