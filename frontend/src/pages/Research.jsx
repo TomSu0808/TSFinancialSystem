@@ -11,13 +11,14 @@ import {
 } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   listResearchTemplates, listHoldings,
   listResearchReports, createResearchRun,
   refreshResearchRun, cancelResearchReport, deleteResearchReport,
   generateTrackingNotes,
 } from '../api'
+import { useDisplaySettings } from '../displaySettings.jsx'
 
 const { TextArea } = Input
 const { Text, Title } = Typography
@@ -205,6 +206,8 @@ function getStepStatus(status) {
 
 export default function Research() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const { displayCurrency } = useDisplaySettings()
   const [templates, setTemplates] = useState([])
   const [holdings, setHoldings] = useState([])
   const [reports, setReports] = useState([])
@@ -258,10 +261,23 @@ export default function Research() {
   }, [hasRunning, refreshReports])
 
   useEffect(() => {
-    listResearchTemplates().then(setTemplates).catch(() => {})
+    listResearchTemplates().then((ts) => {
+      setTemplates(ts)
+      if (searchParams.get('preset') === 'portfolio-review') {
+        const tpl = ts.find((t) => t.key === 'portfolio-review')
+        if (tpl) handleSelectTemplate(tpl)
+      }
+    }).catch(() => {})
     listHoldings().then(setHoldings).catch(() => {})
-    listResearchReports().then(setReports).catch(() => {})
-  }, [])
+    listResearchReports().then((rs) => {
+      setReports(rs)
+      const rid = searchParams.get('report_id')
+      if (rid) {
+        const target = rs.find((r) => String(r.id) === rid)
+        if (target) setViewReport(target)
+      }
+    }).catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const categories = ['全部', ...Array.from(new Set(templates.map((t) => t.category)))]
   const filteredTemplates = activeCategory === '全部'
@@ -304,6 +320,14 @@ export default function Research() {
     }
     setLaunching(true)
     try {
+      const investorParts = [
+        values.investment_goal ? `投资目标：${values.investment_goal}` : '投资目标：未知',
+        values.holding_period ? `持有周期：${values.holding_period}` : '持有周期：未知',
+        values.risk_preference ? `风险偏好：${values.risk_preference}` : '风险偏好：未知',
+        values.cash_needs ? `近期资金需求：${values.cash_needs}` : '近期资金需求：未知',
+      ].join('；')
+      const extra = [values.extra_instruction, isPortfolioReview ? `【投资者背景】${investorParts}` : '']
+        .filter(Boolean).join('\n')
       const payload = {
         template_key: selectedTemplate.key,
         target_name: values.target_name || null,
@@ -313,8 +337,9 @@ export default function Research() {
         report_language: values.report_language || 'zh',
         ai_provider: values.ai_provider || 'deepseek',
         ai_model: values.ai_model || MODEL_OPTIONS[values.ai_provider || 'deepseek']?.[0]?.value,
-        extra_instruction: values.extra_instruction || null,
+        extra_instruction: extra || null,
         use_web_search: values.use_web_search !== false,
+        display_currency: displayCurrency,
       }
       const report = await createResearchRun(payload)
       message.success('AI 研究任务已启动，正在后台处理…')
@@ -569,6 +594,31 @@ export default function Research() {
                   <Form.Item name="report_language" label="报告语言" style={{ marginBottom: 8 }}>
                     <Select options={LANG_OPTIONS} />
                   </Form.Item>
+                )}
+
+                {isPortfolioReview && (
+                  <Row gutter={8}>
+                    <Col xs={24} sm={12}>
+                      <Form.Item name="investment_goal" label="投资目标（可选）" style={{ marginBottom: 8 }}>
+                        <Input placeholder="如：长期增值 / 退休储备" />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12}>
+                      <Form.Item name="holding_period" label="持有周期（可选）" style={{ marginBottom: 8 }}>
+                        <Input placeholder="如：3–5 年" />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12}>
+                      <Form.Item name="risk_preference" label="风险偏好（可选）" style={{ marginBottom: 8 }}>
+                        <Input placeholder="如：稳健 / 激进" />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12}>
+                      <Form.Item name="cash_needs" label="近期资金需求（可选）" style={{ marginBottom: 8 }}>
+                        <Input placeholder="如：半年内需用 5 万" />
+                      </Form.Item>
+                    </Col>
+                  </Row>
                 )}
 
                 <Row gutter={8}>
