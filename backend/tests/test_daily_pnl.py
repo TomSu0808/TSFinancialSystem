@@ -64,7 +64,8 @@ def test_closed_position_preserves_daily_realized_profit_and_income(session, use
     assert row.pnl_usd == 60  # cumulative 160 - yesterday's unrealized 100
 
 
-def test_missing_stale_and_gaps_are_not_zero_profit(session, user):
+def test_price_gaps_and_stale_are_not_zero_profit(session, user):
+    """价格缺失会重建基准（而不是误报为零），行情过期则标 stale。"""
     now = datetime(2026, 9, 10, 23, 55)
     h = seed(session, user, now)
     record_daily_pnl(session, user.id, now)
@@ -72,7 +73,7 @@ def test_missing_stale_and_gaps_are_not_zero_profit(session, user):
     h.current_price = None
     session.add(h)
     session.commit()
-    assert record_daily_pnl(session, user.id, tomorrow).status == "missing"
+    assert record_daily_pnl(session, user.id, tomorrow).status == "adjusted"
     advance(session, h, tomorrow)
     assert record_daily_pnl(session, user.id, tomorrow).pnl_usd == 50
     later = now + timedelta(days=3)
@@ -135,6 +136,21 @@ def test_manual_total_cost_change_rebaselines(session, user):
     session.commit()
     row = record_daily_pnl(session, user.id, tomorrow)
     assert row.status == "adjusted" and row.pnl_cny is None
+
+
+def test_unpriced_holding_is_excluded_not_blocking(session, user):
+    """抓不到价/没成本的持仓应被排除，其余持仓照常算日盈亏，而不是整天失败。"""
+    now = datetime(2026, 9, 10, 23, 55)
+    h = seed(session, user, now)                              # 可估值美股：成本 100、现价 110
+    _fund(session, user, now, cost_value=None, price=None)    # 抓不到价的基金：无价无成本
+    first = record_daily_pnl(session, user.id, now)
+    assert first.status == "baseline"
+    tomorrow = now + timedelta(days=1)
+    advance(session, h, tomorrow)                             # 美股 110 -> 115
+    row = record_daily_pnl(session, user.id, tomorrow)
+    assert row.status == "recorded"
+    assert row.pnl_usd == 50                                  # 10 × (115 − 110)，基金未计入
+    assert "未计入" in row.note
 
 
 def test_backup_roundtrip_preserves_cost_value(client, session, user):

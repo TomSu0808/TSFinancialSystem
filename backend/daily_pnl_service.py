@@ -33,7 +33,7 @@ def record_daily_pnl(session: Session, user_id: int, now=None) -> DailyPnl:
     )).first() or DailyPnl(user_id=user_id, day=day)
 
     native = defaultdict(float)
-    missing = []
+    excluded = []      # 无法估值（缺价格或成本）的持仓：不计入，但不拦截整日
     stale = []
     manual_basis = []
     for h in holdings:
@@ -43,13 +43,13 @@ def record_daily_pnl(session: Session, user_id: int, now=None) -> DailyPnl:
             continue
         p = profit(h)
         if p is None:
-            missing.append(h.id)
+            excluded.append(h.id)
         else:
             native[c] += p
-        if h.manual_value is None and (
-            h.price_updated_at is None or now - h.price_updated_at > timedelta(hours=24)
-        ):
-            stale.append(h.id)
+            if h.manual_value is None and (
+                h.price_updated_at is None or now - h.price_updated_at > timedelta(hours=24)
+            ):
+                stale.append(h.id)
         if h.source == "manual":
             manual_basis.append((h.id, c, h.quantity, h.cost_price, h.cost_value))
 
@@ -62,16 +62,15 @@ def record_daily_pnl(session: Session, user_id: int, now=None) -> DailyPnl:
         ], key=lambda x: x[0]))
 
     basis = {"manual": _digest(sorted(manual_basis)), "transactions": txn_digest(day),
-             "holdings": sorted(h.id for h in holdings if h.asset_type != "cash")}
+             "holdings": sorted(h.id for h in holdings
+                                if h.asset_type != "cash" and h.id not in excluded)}
     old_basis = json.loads(previous.basis_json) if previous else {}
     rates, usdcny, fx_time = get_to_cny_rates(session)
     fx_stale = fx_time == "unknown" or now - datetime.fromisoformat(fx_time) > timedelta(hours=24)
     uses_fx = any(h.currency != "CNY" and h.asset_type != "cash" for h in holdings)
-    complete = not missing and not stale and not (uses_fx and fx_stale)
+    complete = not stale and not (uses_fx and fx_stale)
     row.pnl_cny = row.pnl_usd = None
-    if missing:
-        row.status, row.note = "missing", f"{len(missing)} 项持仓缺少价格或成本，暂不能计算完整日盈亏"
-    elif stale or (uses_fx and fx_stale):
+    if stale or (uses_fx and fx_stale):
         row.status, row.note = "stale", "行情或汇率未更新，保留检查点但不把旧数据标为当日盈亏"
     elif previous is None:
         row.status, row.note = "baseline", "缺少前一日基准；已开始记录，历史不补零"
@@ -79,8 +78,8 @@ def record_daily_pnl(session: Session, user_id: int, now=None) -> DailyPnl:
         row.status, row.note = "missing", "前一日估值不完整，今日重新建立基准"
     elif (old_basis.get("manual") != basis["manual"]
           or old_basis.get("transactions") != txn_digest(yesterday)
-          or not set(old_basis.get("holdings", [])).issubset(basis["holdings"])):
-        row.status, row.note = "adjusted", "持仓本金、历史交易或资产记录发生修改，今日重新建立基准"
+          or set(old_basis.get("holdings", [])) != set(basis["holdings"])):
+        row.status, row.note = "adjusted", "持仓本金、交易、资产记录或可估值范围发生变更，今日重新建立基准"
     else:
         old = json.loads(previous.returns_json)
         from models import Currency
@@ -90,6 +89,8 @@ def record_daily_pnl(session: Session, user_id: int, now=None) -> DailyPnl:
         row.pnl_usd = round(delta / usdcny, 2) if not fx_stale else None
         row.status = "recorded"
         row.note = "累计持仓收益的原币种日差额；含已实现盈亏及分红，排除入出金和汇兑变动"
+        if excluded:
+            row.note += f"；{len(excluded)} 项持仓缺少价格或成本，未计入"
     row.returns_json = json.dumps(native)
     row.basis_json = json.dumps(basis)
     row.coverage_complete = complete
