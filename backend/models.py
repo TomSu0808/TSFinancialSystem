@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
+from sqlalchemy import UniqueConstraint
 
 # 固定安全问题列表（key → 展示文本）
 SECURITY_QUESTIONS: dict[str, str] = {
@@ -127,6 +128,22 @@ class Snapshot(SQLModel, table=True):
     day: Optional[str] = Field(default=None, index=True)  # YYYY-MM-DD，每人每天一条
     total_cny: float = 0.0
     total_usd: float = 0.0
+
+
+class DailyPnl(SQLModel, table=True):
+    """UTC 日累计收益检查点；不从资产总额差伪造投资收益。"""
+    __table_args__ = (UniqueConstraint("user_id", "day", name="uq_daily_pnl_user_day"),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    day: str = Field(index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    returns_json: str = "{}"
+    basis_json: str = "{}"
+    pnl_cny: Optional[float] = None
+    pnl_usd: Optional[float] = None
+    status: str = "baseline"
+    note: str = ""
+    coverage_complete: bool = False
 
 
 class TxnAction(str, Enum):
@@ -472,6 +489,7 @@ class UserAIKeyTestInput(SQLModel):
 class AutomationRun(SQLModel, table=True):
     """每次自动/手动全局刷新任务的执行记录。"""
     id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
     job_name: str = Field(default="daily_refresh")  # daily_refresh / manual
     triggered_by: str = Field(default="scheduler")  # scheduler / manual
     started_at: datetime = Field(default_factory=datetime.utcnow)
@@ -588,6 +606,8 @@ class AlertRuleUpdate(SQLModel):
 
 def market_value(h: Holding) -> float:
     """统一市值口径：手填金额优先，否则数量×现价（Decimal 精度）。"""
+    if h.status == HoldingStatus.closed:
+        return 0.0
     if h.manual_value is not None:
         return float(h.manual_value)
     if h.quantity is not None and h.current_price is not None:
@@ -598,7 +618,7 @@ def market_value(h: Holding) -> float:
 
 def day_change(h: Holding) -> float:
     """今日涨跌额（本币）。手填金额或缺昨收时记 0（Decimal 精度）。"""
-    if h.manual_value is not None:
+    if h.status == HoldingStatus.closed or h.manual_value is not None:
         return 0.0
     if h.quantity is not None and h.current_price is not None and h.prev_close is not None:
         from decimal_utils import d_mul, d_sub, to_float
@@ -617,8 +637,16 @@ def cost_basis(h: Holding) -> Optional[float]:
 
 def profit(h: Holding) -> Optional[float]:
     """累计盈亏（本币）= 市值 − 成本（Decimal 精度）。成本未知则返回 None。"""
+    if h.status == HoldingStatus.closed:
+        return 0.0
+    if not has_valuation(h):
+        return None
     cb = cost_basis(h)
     if cb is None:
         return None
     from decimal_utils import d_sub, to_d, to_float
     return to_float(d_sub(to_d(market_value(h)), to_d(cb)))
+
+
+def has_valuation(h: Holding) -> bool:
+    return h.manual_value is not None or (h.quantity is not None and h.current_price is not None)

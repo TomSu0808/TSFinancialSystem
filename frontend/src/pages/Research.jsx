@@ -16,7 +16,7 @@ import {
   listResearchTemplates, listHoldings,
   listResearchReports, createResearchRun,
   refreshResearchRun, cancelResearchReport, deleteResearchReport,
-  generateTrackingNotes,
+  generateTrackingNotes, listAIKeys,
 } from '../api'
 import { useDisplaySettings } from '../displaySettings.jsx'
 
@@ -219,7 +219,9 @@ export default function Research() {
   const [runForm] = Form.useForm()
   const [launching, setLaunching] = useState(false)
   const useWebSearch = Form.useWatch('use_web_search', runForm)
-  const aiProvider = Form.useWatch('ai_provider', runForm) || 'deepseek'
+  const [aiKeys, setAIKeys] = useState([])
+  const launchGuard = useRef(false)
+  const aiProvider = Form.useWatch('ai_provider', runForm)
 
   const pollingRef = useRef(null)
   const reportsRef = useRef([])
@@ -269,6 +271,7 @@ export default function Research() {
       }
     }).catch(() => {})
     listHoldings().then(setHoldings).catch(() => {})
+    listAIKeys().then(setAIKeys).catch(() => {})
     listResearchReports().then((rs) => {
       setReports(rs)
       const rid = searchParams.get('report_id')
@@ -292,7 +295,20 @@ export default function Research() {
   }
 
   const handleProviderChange = (provider) => {
-    runForm.setFieldsValue({ ai_model: MODEL_OPTIONS[provider]?.[0]?.value })
+    runForm.setFieldsValue({ ai_model: undefined })
+  }
+
+  const handleRetry = (report) => {
+    const template = templates.find((t) => t.key === report.template_key)
+    if (!template) return message.error('模板尚未加载，请稍后重试')
+    handleSelectTemplate(template)
+    runForm.setFieldsValue({
+      ai_provider: report.provider, ai_model: report.model, report_language: report.report_language,
+      target_name: report.target_name, symbol: report.symbol, market: report.market,
+      related_holding_id: report.related_holding_id,
+    })
+    setViewReport(null)
+    message.info('已恢复模板和模型，请确认投资偏好及补充要求后重新开始研究')
   }
 
   const handleHoldingChange = useCallback((holdingId) => {
@@ -308,6 +324,7 @@ export default function Research() {
   }, [holdings, runForm])
 
   const handleLaunch = async () => {
+    if (launchGuard.current) return
     let values = {}
     if (!isPortfolioReview) {
       try {
@@ -318,6 +335,7 @@ export default function Research() {
     } else {
       values = runForm.getFieldsValue()
     }
+    launchGuard.current = true
     setLaunching(true)
     try {
       const investorParts = [
@@ -335,8 +353,8 @@ export default function Research() {
         market: values.market || null,
         related_holding_id: values.related_holding_id ? Number(values.related_holding_id) : null,
         report_language: values.report_language || 'zh',
-        ai_provider: values.ai_provider || 'deepseek',
-        ai_model: values.ai_model || MODEL_OPTIONS[values.ai_provider || 'deepseek']?.[0]?.value,
+        ai_provider: values.ai_provider || null,
+        ai_model: values.ai_model || null,
         extra_instruction: extra || null,
         use_web_search: values.use_web_search !== false,
         display_currency: displayCurrency,
@@ -358,6 +376,7 @@ export default function Research() {
       }
       refreshReports()
     } finally {
+      launchGuard.current = false
       setLaunching(false)
     }
   }
@@ -461,7 +480,7 @@ export default function Research() {
 
       <Row gutter={16}>
         {/* 左列：模板卡片 + 任务表单 */}
-        <Col xs={24} lg={14}>
+        <Col xs={24} lg={viewReport ? 8 : 14}>
           <Card
             size="small"
             title={<Space><BulbOutlined /><span>AI Berkshire Skills</span></Space>}
@@ -545,8 +564,8 @@ export default function Research() {
                 size="small"
                 initialValues={{
                   report_language: 'zh',
-                  ai_provider: 'deepseek',
-                  ai_model: 'deepseek-v4-pro',
+                  ai_provider: undefined,
+                  ai_model: undefined,
                   use_web_search: true,
                 }}
               >
@@ -624,12 +643,12 @@ export default function Research() {
                 <Row gutter={8}>
                   <Col xs={24} sm={12}>
                     <Form.Item name="ai_provider" label="模型提供商" style={{ marginBottom: 8 }}>
-                      <Select options={PROVIDER_OPTIONS} onChange={handleProviderChange} />
+                      <Select allowClear placeholder="使用账户默认服务" options={PROVIDER_OPTIONS} onChange={handleProviderChange} />
                     </Form.Item>
                   </Col>
                   <Col xs={24} sm={12}>
                     <Form.Item name="ai_model" label="模型" style={{ marginBottom: 8 }}>
-                      <Select options={MODEL_OPTIONS[aiProvider] || []} />
+                      <Select allowClear placeholder="使用该服务的默认模型" options={MODEL_OPTIONS[aiProvider || aiKeys.find((k) => k.is_default)?.provider] || []} />
                     </Form.Item>
                   </Col>
                 </Row>
@@ -668,7 +687,7 @@ export default function Research() {
         </Col>
 
         {/* 右列：报告详情 / 报告列表 */}
-        <Col xs={24} lg={10}>
+        <Col xs={24} lg={viewReport ? 16 : 10}>
           {viewReport ? (
             <ReportDetail
               report={viewReport}
@@ -676,7 +695,7 @@ export default function Research() {
               onRefresh={handleRefresh}
               onCancel={handleCancel}
               onDelete={handleDelete}
-              onRetry={() => setViewReport(null)}
+              onRetry={() => handleRetry(viewReport)}
               onGenerateTracking={handleGenerateTracking}
               generatingTracking={generatingTracking}
             />
@@ -843,9 +862,9 @@ function ReportDetail({ report, onBack, onRefresh, onCancel, onDelete, onRetry, 
       {/* Report body */}
       {report.report_md ? (
         <div style={{
-          marginBottom: 10, maxHeight: 520, overflowY: 'auto',
-          padding: '4px 8px', border: '1px solid #f0f0f0', borderRadius: 6,
-          background: '#fff', fontSize: 13,
+          marginBottom: 10, maxHeight: 720, overflowY: 'auto',
+          padding: '20px 24px', border: '1px solid #f0f0f0', borderRadius: 12,
+          background: '#fff', color: '#262626', fontSize: 14, lineHeight: 1.85,
         }}>
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
             {report.report_md}

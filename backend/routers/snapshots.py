@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 
 from auth import get_current_user
 from database import get_session
-from models import Snapshot, User
+from models import Snapshot, User, DailyPnl, Currency
 
 router = APIRouter(prefix="/api/snapshots", tags=["snapshots"])
 
@@ -41,7 +41,7 @@ def list_snapshots(
     user: User = Depends(get_current_user),
 ) -> List[dict]:
     today = datetime.utcnow().date()
-    stmt = select(Snapshot).where(Snapshot.user_id == user.id)
+    stmt = select(Snapshot).where(Snapshot.user_id == user.id, Snapshot.day <= today.isoformat())
     if range_key is not None:
         if range_key not in RANGE_KEYS:
             raise HTTPException(400, f"非法 range：{range_key}，可选 {', '.join(RANGE_KEYS)}")
@@ -55,5 +55,34 @@ def list_snapshots(
     return [
         {"day": r.day, "total_cny": round(r.total_cny, 2), "total_usd": round(r.total_usd, 2)}
         for r in rows
-        if r.day  # 跳过历史无 day 的旧记录
+        if _valid_day(r.day)
     ]
+
+
+def _valid_day(value):
+    try:
+        return bool(value) and date.fromisoformat(value).isoformat() == value
+    except (ValueError, TypeError):
+        return False
+
+
+@router.get("/daily-pnl")
+def daily_pnl(
+    days: int = Query(90, ge=1, le=3650),
+    currency: Currency = Query(Currency.CNY),
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    today = datetime.utcnow().date()
+    since = (today - timedelta(days=days - 1)).isoformat()
+    rows = session.exec(select(DailyPnl).where(
+        DailyPnl.user_id == user.id, DailyPnl.day >= since, DailyPnl.day <= today.isoformat(),
+    ).order_by(DailyPnl.day.desc())).all()
+    return {
+        "timezone": "UTC", "currency": currency.value,
+        "method": "按 UTC 日记录累计持仓收益变化，含已实现盈亏与分红，排除入出金和汇兑变动。今日为截至最近更新的暂计值；跨市场未必对应同一交易日。",
+        "items": [{"day": r.day, "pnl": r.pnl_cny if currency == Currency.CNY else (
+            r.pnl_usd if currency == Currency.USD else (round(r.pnl_usd * 7.8, 2) if r.pnl_usd is not None else None)),
+            "status": r.status, "note": r.note, "updated_at": r.updated_at.isoformat() + "Z",
+            "provisional": r.day == today.isoformat()} for r in rows if _valid_day(r.day)],
+    }

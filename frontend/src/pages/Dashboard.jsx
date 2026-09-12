@@ -7,14 +7,16 @@ import {
   ReloadOutlined, ArrowUpOutlined, ArrowDownOutlined,
   EditOutlined, InfoCircleOutlined, ExclamationCircleOutlined,
   CheckCircleOutlined, RightOutlined, WarningOutlined, BellOutlined,
-  ThunderboltOutlined, PlusOutlined, UploadOutlined, RobotOutlined,
+  ThunderboltOutlined, PlusOutlined, UploadOutlined, RobotOutlined, CalendarOutlined,
 } from '@ant-design/icons'
 
 const { Title, Text } = Typography
 import ReactECharts from 'echarts-for-react'
-import { getSummary, getSnapshots, refreshPrices, refreshRate, getAutomationStatus, runNow, listAlertEvents, getPortfolioSummary } from '../api'
+import { getSummary, getSnapshots, refreshPrices, refreshRate, getAutomationStatus, runNow, listAlertEvents, getPortfolioSummary, getStoredUser, ensureLoginRefresh } from '../api'
 import { CURRENCY_SYMBOL, CURRENCY_LABEL, ASSET_TYPE_LABEL, fmt, isMasked } from '../constants'
 import { useColorScheme } from '../colorScheme.jsx'
+import DailyPnlDrawer from '../components/DailyPnlDrawer.jsx'
+import ReactMarkdown from 'react-markdown'
 import { useDisplaySettings } from '../displaySettings.jsx'
 
 function MetricCard({ label, value, sub, tone }) {
@@ -48,7 +50,14 @@ export default function Dashboard({ autoRefresh = false }) {
     { value: '1m', label: '1个月' },
     { value: '1w', label: '1周' },
   ]
-  const [snapRange, setSnapRange] = useState(() => localStorage.getItem('snapshotRange') || '6m')
+  const rangeKey = `snapshotRange:${getStoredUser()?.id}`
+  const [snapRange, setSnapRange] = useState(() => {
+    const value = localStorage.getItem(rangeKey)
+    return RANGE_OPTIONS.some((r) => r.value === value) ? value : '6m'
+  })
+  const [pnlOpen, setPnlOpen] = useState(false)
+  const [loginRefreshing, setLoginRefreshing] = useState(false)
+  const [loginRefreshError, setLoginRefreshError] = useState(null)
   const [snapsLoading, setSnapsLoading] = useState(false)
   const [snapsError, setSnapsError] = useState(null)
   const [portfolioSummary, setPortfolioSummary] = useState(null)
@@ -86,12 +95,28 @@ export default function Dashboard({ autoRefresh = false }) {
   }, [displayCurrency, loadSnapshots])
 
   useEffect(() => {
+    let active = true
     load()
+    setLoginRefreshing(true)
+    ensureLoginRefresh().then((run) => {
+      if (!active) return
+      if (run && run.status !== 'success') setLoginRefreshError(run.error_message || '部分行情更新失败，已保留最近可用数据')
+      load()
+    }).catch((e) => {
+      if (active) setLoginRefreshError(e.response?.data?.detail || '登录自动刷新失败，请点击更新重试')
+    }).finally(() => { if (active) setLoginRefreshing(false) })
+    return () => { active = false }
   }, [load])
 
   useEffect(() => {
+    if (!['queued', 'running'].includes(portfolioSummary?.latest_task?.status)) return
+    const timer = setInterval(() => getPortfolioSummary().then(setPortfolioSummary).catch(() => {}), 5000)
+    return () => clearInterval(timer)
+  }, [portfolioSummary?.latest_task?.status])
+
+  useEffect(() => {
     snapRangeRef.current = snapRange
-    localStorage.setItem('snapshotRange', snapRange)
+    localStorage.setItem(rangeKey, snapRange)
     loadSnapshots(snapRange)
   }, [snapRange, loadSnapshots])
 
@@ -107,6 +132,7 @@ export default function Dashboard({ autoRefresh = false }) {
       if (fx.status === 'rejected') {
         message.warning('汇率刷新失败，暂用最近一次缓存')
       }
+      setLoginRefreshError(null)
       await load()
     } finally {
       setRefreshing(false)
@@ -226,6 +252,9 @@ export default function Dashboard({ autoRefresh = false }) {
 
   return (
     <Space direction="vertical" size={16} style={{ display: 'flex' }}>
+      <DailyPnlDrawer open={pnlOpen} onClose={() => setPnlOpen(false)} currency={displayCurrency} masked={masked} refreshKey={summary} />
+      {loginRefreshing && <Alert type="info" showIcon message="正在自动更新行情、汇率和盈亏…" />}
+      {loginRefreshError && <Alert type="warning" showIcon message={loginRefreshError} action={<Button size="small" loading={refreshing} onClick={doRefresh}>重试更新</Button>} />}
       {/* 页面标题与说明 */}
       <div style={{ marginBottom: -8 }}>
         <Title level={3} style={{ marginTop: 0, marginBottom: 4, fontWeight: 700 }}>
@@ -264,13 +293,6 @@ export default function Dashboard({ autoRefresh = false }) {
           >
             AI 投研
           </Button>
-          <Button
-            type="primary"
-            icon={<RobotOutlined />}
-            onClick={() => navigate('/research?preset=portfolio-review')}
-          >
-            AI 分析全部账户
-          </Button>
         </Space>
       </div>
 
@@ -284,12 +306,13 @@ export default function Dashboard({ autoRefresh = false }) {
               {sym}{fmt(total)}
             </div>
             <Space size={18} wrap style={{ marginTop: 16 }}>
-              <Space size={6}>
+              <Space size={6} wrap>
                 <span style={{ color: changeColor, fontSize: 16 }}>
                   {up ? <ArrowUpOutlined /> : <ArrowDownOutlined />} {sym}{fmt(Math.abs(change))}
                 </span>
                 <span style={{ color: changeColor }}>({up ? '+' : ''}{summary?.change_pct ?? 0}%)</span>
-                <span style={{ color: '#8c8c8c' }}>今日</span>
+                <span style={{ color: '#8c8c8c' }}>今日涨跌</span>
+                <Button size="small" type="text" icon={<CalendarOutlined />} onClick={() => setPnlOpen(true)}>每日盈亏</Button>
               </Space>
               <Tooltip
                 title={(
@@ -618,6 +641,11 @@ export default function Dashboard({ autoRefresh = false }) {
         </Card>
       )}
 
+      {portfolioSummary?.latest_task && portfolioSummary.latest_task.status !== 'completed' && (
+        <Alert showIcon type={portfolioSummary.latest_task.status === 'failed' ? 'warning' : 'info'}
+          message={['queued', 'running'].includes(portfolioSummary.latest_task.status) ? '新的全账户分析正在生成，下方保留上一次成功报告' : '最近一次分析未完成，可重新发起分析'}
+          action={<Button size="small" onClick={() => navigate(`/research?report_id=${portfolioSummary.latest_task.id}`)}>查看任务</Button>} />
+      )}
       {portfolioSummary && portfolioSummary.report && (
         <Card
           size="small"
@@ -634,7 +662,7 @@ export default function Dashboard({ autoRefresh = false }) {
           }
         >
           <Text type="secondary" style={{ fontSize: 12 }}>
-            数据时点：{(portfolioSummary.report.as_of || '').slice(0, 16).replace('T', ' ')}
+            数据时点：{portfolioSummary.report.as_of || '旧报告未记录'} · {portfolioSummary.report.display_currency || '币种未记录'}
           </Text>
           {portfolioSummary.report.degraded ? (
             <div style={{ marginTop: 8, fontSize: 13, color: '#8c8c8c' }}>
@@ -644,6 +672,7 @@ export default function Dashboard({ autoRefresh = false }) {
             <Collapse
               ghost
               size="small"
+              key={masked ? 'masked' : 'visible'}
               defaultActiveKey={masked ? [] : ['summary']}
               items={[
                 {
@@ -653,17 +682,17 @@ export default function Dashboard({ autoRefresh = false }) {
                     <>
                       <ul style={{ margin: 0, paddingLeft: 20 }}>
                         {portfolioSummary.report.conclusions.map((c, i) => (
-                          <li key={i} style={{ fontSize: 13 }}>{c}</li>
+                          <li key={i} style={{ fontSize: 14, lineHeight: 1.8, marginBottom: 8 }}><ReactMarkdown components={{ p: ({ children }) => <span>{children}</span> }}>{c}</ReactMarkdown></li>
                         ))}
                       </ul>
                       {portfolioSummary.report.risks?.length > 0 && (
                         <div style={{ marginTop: 6, fontSize: 13, color: '#595959' }}>
-                          主要风险：{portfolioSummary.report.risks.join('；')}
+                          <Text strong>主要风险</Text><ReactMarkdown>{portfolioSummary.report.risks.map((r) => `- ${r}`).join('\n')}</ReactMarkdown>
                         </div>
                       )}
                       {portfolioSummary.report.actions?.length > 0 && (
                         <div style={{ marginTop: 6, fontSize: 13, color: '#595959' }}>
-                          优先行动：{portfolioSummary.report.actions.join('；')}
+                          <Text strong>优先行动</Text><ReactMarkdown>{portfolioSummary.report.actions.map((r) => `- ${r}`).join('\n')}</ReactMarkdown>
                         </div>
                       )}
                     </>
@@ -677,15 +706,16 @@ export default function Dashboard({ autoRefresh = false }) {
 
       <Card
         loading={loading || snapsLoading}
-        title="总资产走势"
-        extra={
-          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+        title={
+          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 12, padding: '12px 0' }}>
+            <span>总资产走势</span>
             <Radio.Group
               size="small"
               optionType="button"
               buttonStyle="solid"
               value={snapRange}
               onChange={(e) => setSnapRange(e.target.value)}
+              style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 4 }}
               options={RANGE_OPTIONS}
             />
           </div>

@@ -8,6 +8,11 @@ primary_region = "nrt"
 
 [env]
   DATA_DIR = "/data"
+  AUTO_REFRESH_ENABLED = "true"
+  AUTO_REFRESH_TIME = "07:55"
+  AUTO_REFRESH_TIMEZONE = "Asia/Shanghai"
+  AUTO_REFRESH_INTERVAL_HOURS = "24"
+  AUTO_REFRESH_ON_STARTUP = "true"
   # CORS 同源部署无需放开；如以后前端单独部署再到 secrets/env 里加 CORS_ORIGINS
 
 [http_service]
@@ -15,7 +20,7 @@ primary_region = "nrt"
   force_https = true          # 自动 HTTPS（Fly 免费签发证书）
   auto_stop_machines = "stop" # 没人访问时自动休眠，省额度
   auto_start_machines = true  # 有请求自动唤醒
-  min_machines_running = 0
+  min_machines_running = 1 # 保留运行实例，让无人访问时每日任务仍执行
 
 # 持久卷：SQLite 的 data.db 落在这里，重新部署也不丢数据。
 # 部署前需先建卷： fly volumes create data --size 1 --region nrt

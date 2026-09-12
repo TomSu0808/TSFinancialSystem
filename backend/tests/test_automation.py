@@ -3,6 +3,54 @@ import pytest
 from sqlmodel import Session, select
 
 
+@pytest.fixture(autouse=True)
+def market_data(monkeypatch):
+    monkeypatch.setattr("automation_service.fetch_quote", lambda *args: {"price": 110, "prev_close": 105})
+    monkeypatch.setattr("fx_provider.fetch_usdcny", lambda: 7.2)
+
+
+def test_login_refresh_is_scoped_and_records_reason(client, session, user):
+    from models import Holding, Platform, User
+    other = User(username="refresh_other", password_hash="x")
+    session.add(other)
+    session.commit()
+    p = Platform(user_id=other.id, name="Other")
+    session.add(p)
+    session.commit()
+    h = Holding(user_id=other.id, platform_id=p.id, symbol="AAPL", market="US", current_price=1)
+    session.add(h)
+    session.commit()
+    result = client.post('/api/automation/run-now?reason=login').json()
+    assert result['triggered_by'] == 'login'
+    assert result['user_id'] == user.id
+    session.refresh(h)
+    assert h.current_price == 1
+
+
+def test_scheduler_refreshes_offline_users_and_daily_pnl(session, user):
+    from automation_service import run_all_users_job
+    from models import DailyPnl
+    result = run_all_users_job(session)
+    assert result.status == 'success'
+    assert session.exec(select(DailyPnl).where(DailyPnl.user_id == user.id)).first() is not None
+
+
+def test_partial_refresh_is_not_reported_as_success(client, monkeypatch):
+    monkeypatch.setattr("fx_provider.fetch_usdcny", lambda: None)
+    assert client.post('/api/automation/run-now').json()['status'] == 'partial_failed'
+
+
+def test_run_history_hides_other_users(client, session, user):
+    from models import AutomationRun, User
+    other = User(username="history_other", password_hash="x")
+    session.add(other)
+    session.commit()
+    session.add(AutomationRun(user_id=other.id, triggered_by="login", status="failed", error_message="private"))
+    session.commit()
+    assert client.get('/api/automation/runs').json() == []
+    assert client.get('/api/automation/status').json()['last_run'] is None
+
+
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
 
 def _platform(client, name="Futu"):

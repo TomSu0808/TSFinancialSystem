@@ -1,7 +1,7 @@
 """投研服务层：加载 AI Berkshire skill → 构建 prompt → 调用 AI → 同步状态。"""
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 from sqlmodel import Session, select
@@ -197,9 +197,15 @@ def create_run(
     provider = ai_client.normalize_provider(ai_provider)
 
     # Look up user's key for this provider; fall back to their default key
-    user_key: Optional[UserAIKey] = _get_user_ai_key(session, user.id, provider)
-    if user_key is None and not ai_provider:
+    user_key: Optional[UserAIKey] = _get_user_ai_key(session, user.id, provider) if ai_provider else None
+    if not ai_provider:
         user_key = _get_user_default_ai_key(session, user.id)
+        if user_key is None:
+            user_key = _get_user_ai_key(session, user.id, provider)
+        if user_key is None:
+            available = session.exec(select(UserAIKey).where(UserAIKey.user_id == user.id)).all()
+            if len(available) == 1:
+                user_key = available[0]
         if user_key:
             provider = user_key.provider  # align provider to the default key
 
@@ -236,12 +242,15 @@ def create_run(
     is_portfolio = template_key == "portfolio-review"
     input_context_md = ""
     if is_portfolio:
+        assets = session.exec(select(Holding).where(Holding.user_id == user.id, Holding.status == "open")).all()
+        if not any(portfolio_context._valued(h) and market_value(h) > 0 for h in assets):
+            raise ValueError("当前无有效可估值资产，请先添加持仓并更新价格后再分析。")
         input_context_md = portfolio_context.build_account_context(session, user, display_currency)
     elif holding:
         input_context_md = _holding_context(holding, session)
 
     # 6. Resolve effective values
-    eff_target = target_name or (holding.name if holding else None) or "目标公司"
+    eff_target = target_name or (holding.name if holding else None) or ("全账户投资组合" if is_portfolio else "目标公司")
     eff_symbol = symbol or (holding.symbol if holding else "") or ""
     eff_market = market or (holding.market.value if holding else "") or ""
 
@@ -257,6 +266,32 @@ def create_run(
         extra_instruction=extra_instruction or "",
         is_portfolio=is_portfolio,
     )
+
+    # Keep every holding. Reject oversize input explicitly before a paid call.
+    if is_portfolio and len(prompt_md.encode("utf-8")) > 100_000:
+        input_context_md = portfolio_context.build_account_context(session, user, display_currency, compact=True)
+        prompt_md = research_prompt_builder.build_prompt(
+            skill_md=skill_md, target_name=eff_target, symbol=eff_symbol, market=eff_market,
+            portfolio_ctx=input_context_md, report_language=report_language,
+            extra_instruction=extra_instruction or "", is_portfolio=True,
+        )
+    if is_portfolio and len(prompt_md.encode("utf-8")) > 100_000:
+        raise ValueError("组合上下文超过本系统单次分析上限（100 KB），未发送 AI 请求，也未截断持仓。请精简补充要求或分账户研究。")
+
+    if is_portfolio:
+        prompt_md += (
+            "\n\nExternal search requested: " + str(bool(use_web_search)).lower()
+            + ". Only describe external facts as verified when a search actually succeeds.\n"
+        )
+        recent = session.exec(select(ResearchReport).where(
+            ResearchReport.user_id == user.id, ResearchReport.template_key == template_key,
+            ResearchReport.created_at >= datetime.utcnow() - timedelta(seconds=30),
+            ResearchReport.status.in_(["queued", "running", "completed"]),
+            ResearchReport.provider == provider, ResearchReport.model == model,
+            ResearchReport.prompt_md == prompt_md,
+        ).order_by(ResearchReport.id.desc())).first()
+        if recent:
+            return recent
 
     # 8. Generate title
     template_name_zh = skill_meta["name"]

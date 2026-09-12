@@ -4,6 +4,16 @@ from datetime import date
 from routers.snapshots import _range_start
 
 
+def test_filters_malformed_and_future_dates(client, session, user):
+    from models import Snapshot
+    from datetime import datetime, timedelta
+    today = datetime.utcnow().date()
+    for day in (None, "", "2026-02-30", "2026-1-1", (today + timedelta(days=1)).isoformat(), today.isoformat()):
+        session.add(Snapshot(user_id=user.id, day=day, total_cny=100))
+    session.commit()
+    assert [r['day'] for r in client.get('/api/snapshots?range=max').json()] == [today.isoformat()]
+
+
 def test_range_start_month_end_and_leap():
     assert _range_start("1m", date(2026, 3, 31)) == "2026-02-28"
     assert _range_start("1m", date(2024, 3, 31)) == "2024-02-29"   # 闰年 2 月 29

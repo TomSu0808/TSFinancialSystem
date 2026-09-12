@@ -25,7 +25,9 @@ def _seconds_to_next(time_str: str, interval_hours: int, tz_name: str) -> float:
     h, m = map(int, time_str.split(":"))
     target_today = now.replace(hour=h, minute=m, second=0, microsecond=0)
     if now >= target_today:
-        target = target_today + timedelta(hours=interval_hours)
+        elapsed = (now - target_today).total_seconds()
+        steps = int(elapsed // (max(interval_hours, 1) * 3600)) + 1
+        target = target_today + timedelta(hours=max(interval_hours, 1) * steps)
     else:
         target = target_today
     return max((target - now).total_seconds(), 1.0)

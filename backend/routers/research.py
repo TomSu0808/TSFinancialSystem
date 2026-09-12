@@ -13,9 +13,12 @@ from models import Holding, HoldingStatus, Note, ResearchReport, ResearchReportC
 from models import Currency, cost_basis, market_value, profit
 from ai_berkshire_loader import list_skills
 import research_service
+from threading import Lock
 from ai_client import AIServiceNotConfigured
 
 router = APIRouter(prefix="/api/research", tags=["research"])
+_launches = set()
+_launch_guard = Lock()
 
 
 def _owned(session: Session, report_id: int, user: User) -> ResearchReport:
@@ -139,6 +142,10 @@ def create_run(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
+    with _launch_guard:
+        if user.id in _launches:
+            raise HTTPException(409, "分析正在提交，请勿重复点击")
+        _launches.add(user.id)
     try:
         return research_service.create_run(
             session=session,
@@ -161,6 +168,9 @@ def create_run(
         raise HTTPException(400, str(exc))
     except PermissionError as exc:
         raise HTTPException(404, str(exc))
+    finally:
+        with _launch_guard:
+            _launches.discard(user.id)
 
 
 @router.post("/runs/{report_id}/refresh", response_model=ResearchReport)
@@ -221,6 +231,7 @@ def generate_prompt(
         market=req.market or "",
         holding_ctx=holding_ctx,
         portfolio_ctx=portfolio_ctx,
+        is_portfolio=req.template_key == "portfolio-review",
     )
     return {"prompt": prompt}
 
@@ -245,29 +256,28 @@ def portfolio_summary(
     user: User = Depends(get_current_user),
 ):
     """返回最新成功组合报告的派生摘要，供首页总览卡片使用。"""
-    reports = session.exec(
-        select(ResearchReport).where(
-            ResearchReport.user_id == user.id,
-            ResearchReport.template_key == "portfolio-review",
-            ResearchReport.status == "completed",
-        ).order_by(ResearchReport.updated_at.desc()).limit(20)
-    ).all()
-    report = next((r for r in reports if r.report_md), None)
+    base = select(ResearchReport).where(
+        ResearchReport.user_id == user.id, ResearchReport.template_key == "portfolio-review")
+    latest = session.exec(base.order_by(ResearchReport.created_at.desc(), ResearchReport.id.desc())).first()
+    report = session.exec(base.where(ResearchReport.status == "completed", ResearchReport.report_md != None,
+                                     ResearchReport.report_md != "")
+                          .order_by(ResearchReport.created_at.desc(), ResearchReport.id.desc())).first()
+    task = {"id": latest.id, "status": latest.status, "error_message": latest.error_message} if latest else None
     if not report:
-        return {"report": None}
+        return {"report": None, "latest_task": task}
     conclusions = _extract_bullets(report.report_md, ("结论摘要", "Summary"))
     risks = _extract_bullets(report.report_md, ("主要风险", "Key Risks"))
     actions = _extract_bullets(report.report_md, ("行动项", "Action Items"))
+    match = re.search(r"分析时点：([^\n]+)", report.input_context_md or "")
+    currency = re.search(r"展示币种：([A-Z]+)", report.input_context_md or "")
     return {
+        "latest_task": task,
         "report": {
-            "id": report.id,
-            "title": report.title,
-            "as_of": (report.completed_at or report.created_at).isoformat(),
-            "status": report.status,
-            "conclusions": conclusions[:3],
-            "risks": risks[:5],
-            "actions": actions[:5],
-            "degraded": not conclusions,
+            "id": report.id, "title": report.title,
+            "as_of": match.group(1).strip() if match else None,
+            "display_currency": currency.group(1) if currency else None,
+            "status": report.status, "conclusions": conclusions[:3], "risks": risks[:5],
+            "actions": actions[:5], "degraded": not conclusions,
         }
     }
 
@@ -402,7 +412,15 @@ def generate_tracking_notes(
     source_label = report.title or report.target_name or f"报告#{report_id}"
 
     notes: List[Note] = []
-    for item in items:
+    holdings = session.exec(select(Holding).where(Holding.user_id == user.id)).all()
+    for item in dict.fromkeys(items):
+        item_symbol, item_holding_id = symbol, report.related_holding_id
+        if report.template_key == "portfolio-review":
+            matches = re.findall(r"\b(A|HK|US|FUND|CRYPTO):([A-Za-z0-9.\-]+)", item)
+            matched = [h for h in holdings if (h.market.value, h.symbol) in matches]
+            if len({(h.market, h.symbol) for h in matched}) == 1:
+                item_symbol = matched[0].symbol
+                item_holding_id = matched[0].id if len(matched) == 1 else None
         title = item[:40] + ("…" if len(item) > 40 else "")
         content = f"{item}\n\n---\n来源：{source_label}（{report_date}）"
         note = Note(
@@ -412,8 +430,8 @@ def generate_tracking_notes(
             note_type="action",
             status="active",
             source_report_id=report_id,
-            related_holding_id=report.related_holding_id,
-            symbol=symbol,
+            related_holding_id=item_holding_id,
+            symbol=item_symbol,
         )
         session.add(note)
         notes.append(note)

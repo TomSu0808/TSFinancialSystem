@@ -97,6 +97,7 @@ def _migrate_add_user_id() -> None:
             "tags": "VARCHAR",
         },
         "snapshot": {"user_id": "INTEGER", "day": "VARCHAR"},
+        "automationrun": {"user_id": "INTEGER"},
         "transaction": {"holding_id": "INTEGER"},
         "importsession": {
             "platform_id": "INTEGER",

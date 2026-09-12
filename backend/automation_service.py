@@ -16,6 +16,7 @@ from models import (
     market_value,
 )
 from price_provider import fetch_quote
+from job_locks import serialized_refresh
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def _refresh_user_holdings(session: Session, user_id: int) -> tuple[int, int]:
     total = 0
     updated = 0
     for h in holdings:
-        if h.manual_value is not None or not h.symbol:
+        if h.status == "closed" or h.manual_value is not None or not h.symbol:
             continue
         total += 1
         try:
@@ -91,11 +92,14 @@ def _upsert_snapshot(session: Session, user_id: int) -> bool:
         snap = Snapshot(user_id=user_id, day=today, total_cny=total_cny, total_usd=total_usd)
     session.add(snap)
     session.commit()
+    from daily_pnl_service import record_daily_pnl
+    record_daily_pnl(session, user_id)
     return True
 
 
 # ── 公开接口 ──────────────────────────────────────────────────────────────────
 
+@serialized_refresh
 def run_all_users_job(session: Session, triggered_by: str = "scheduler") -> AutomationRun:
     """全量任务：刷新汇率 + 刷新所有用户行情 + 保存快照 + 评估提醒。
     单用户失败不中断其他用户。返回 AutomationRun 记录。
@@ -141,6 +145,7 @@ def run_all_users_job(session: Session, triggered_by: str = "scheduler") -> Auto
                         logger.warning("提醒评估失败 user=%s: %s", user.id, ae)
                 succeeded += 1
             except Exception as exc:  # noqa: BLE001
+                session.rollback()
                 logger.error("用户 %s 任务失败: %s", user.id, exc)
 
         run.holdings_total = h_total
@@ -148,11 +153,12 @@ def run_all_users_job(session: Session, triggered_by: str = "scheduler") -> Auto
         run.snapshots_saved = snaps_saved
         run.users_succeeded = succeeded
         run.status = (
-            "success" if succeeded == len(users)
+            "success" if succeeded == len(users) and fx_ok and h_total == h_updated
             else "partial_failed" if succeeded > 0
             else "failed"
         )
     except Exception as exc:  # noqa: BLE001
+        session.rollback()
         run.status = "failed"
         run.error_message = str(exc)
         logger.error("自动化任务异常: %s", exc)
@@ -164,13 +170,15 @@ def run_all_users_job(session: Session, triggered_by: str = "scheduler") -> Auto
     return run
 
 
-def run_single_user_job(session: Session, user_id: int) -> AutomationRun:
+@serialized_refresh
+def run_single_user_job(session: Session, user_id: int, triggered_by: str = "manual") -> AutomationRun:
     """单用户手动触发刷新：行情 + 快照 + 提醒评估。"""
     from config import ALERTS_ENABLED
 
     run = AutomationRun(
         job_name="daily_refresh",
-        triggered_by="manual",
+        triggered_by=triggered_by,
+        user_id=user_id,
         started_at=datetime.utcnow(),
         status="running",
         users_total=1,
@@ -198,8 +206,11 @@ def run_single_user_job(session: Session, user_id: int) -> AutomationRun:
                 logger.warning("提醒评估失败: %s", ae)
 
         run.users_succeeded = 1
-        run.status = "success"
+        run.status = "success" if fx_ok and ht == hu else "partial_failed"
+        if run.status == "partial_failed":
+            run.error_message = "部分行情或汇率更新失败，已保留最近可用值"
     except Exception as exc:  # noqa: BLE001
+        session.rollback()
         run.status = "failed"
         run.error_message = str(exc)
         logger.error("单用户任务异常: %s", exc)
@@ -211,10 +222,11 @@ def run_single_user_job(session: Session, user_id: int) -> AutomationRun:
     return run
 
 
-def get_last_run(session: Session) -> Optional[AutomationRun]:
+def get_last_run(session: Session, user_id: Optional[int] = None) -> Optional[AutomationRun]:
     """返回最近一次已完成的 AutomationRun。"""
     return session.exec(
         select(AutomationRun)
-        .where(AutomationRun.status != "running")
+        .where(AutomationRun.status != "running",
+               (AutomationRun.user_id == user_id) | ((AutomationRun.user_id == None) & (AutomationRun.triggered_by == "scheduler")))
         .order_by(AutomationRun.started_at.desc())
     ).first()

@@ -81,3 +81,18 @@ def test_migrate_idempotent(engine):
         migrate()  # 再次，幂等
     finally:
         database.engine = original
+
+
+def test_old_automation_table_gets_user_id_and_daily_table_is_created(monkeypatch):
+    from sqlalchemy import text
+    from sqlmodel import create_engine
+    import database
+    engine = create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE automationrun (id INTEGER PRIMARY KEY)"))
+    monkeypatch.setattr(database, 'engine', engine)
+    database.init_db()
+    database.init_db()
+    with engine.connect() as conn:
+        assert database._column_exists(conn, 'automationrun', 'user_id')
+        assert database._table_exists(conn, 'dailypnl')

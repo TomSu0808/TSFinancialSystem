@@ -8,11 +8,11 @@ from sqlmodel import Session, select
 
 from auth import get_current_user
 from database import get_session
-from models import Holding, Note, Platform, ResearchReport, Transaction, User
+from models import Holding, Note, Platform, ResearchReport, Transaction, User, DailyPnl, Snapshot
 
 router = APIRouter(prefix="/api/backup", tags=["backup"])
 
-VERSION = 1
+VERSION = 2
 
 
 def _dt(v: Any) -> Any:
@@ -39,6 +39,8 @@ def export_backup(
 
     return {
         "version": VERSION,
+        "daily_pnl": [r.model_dump(mode="json", exclude={"id", "user_id"}) for r in session.exec(select(DailyPnl).where(DailyPnl.user_id == user.id)).all()],
+        "snapshots": [r.model_dump(mode="json", exclude={"id", "user_id"}) for r in session.exec(select(Snapshot).where(Snapshot.user_id == user.id)).all()],
         "exported_at": datetime.utcnow().isoformat(),
         "username": user.username,
         "platforms": [{"ref": p.id, "name": p.name, "note": p.note} for p in plats],
@@ -110,6 +112,8 @@ class ImportPayload(BaseModel):
     notes: List[Dict[str, Any]] = []
     transactions: List[Dict[str, Any]] = []
     research_reports: List[Dict[str, Any]] = []
+    daily_pnl: List[Dict[str, Any]] = []
+    snapshots: List[Dict[str, Any]] = []
 
 
 @router.post("/import")
@@ -120,7 +124,7 @@ def import_backup(
 ) -> Dict[str, Any]:
     """覆盖式恢复：先清空当前用户的全部数据，再按备份重建。"""
     # 1) 清空当前用户数据（先子后父）
-    for model in (ResearchReport, Transaction, Holding, Note, Platform):
+    for model in (DailyPnl, Snapshot, ResearchReport, Transaction, Holding, Note, Platform):
         for row in session.exec(select(model).where(model.user_id == user.id)).all():
             session.delete(row)
     session.commit()
@@ -207,6 +211,29 @@ def import_backup(
             completed_at=_parse_dt(completed_at_raw) if completed_at_raw else None,
         ))
 
+    session.commit()
+
+    # 历史盈亏保留；恢复后的持仓 ID 已变化，下一日重建计算基准。
+    from routers.snapshots import _valid_day
+    seen = set()
+    for entry in data.daily_pnl:
+        if not _valid_day(entry.get("day")) or entry["day"] in seen:
+            continue
+        seen.add(entry["day"])
+        session.add(DailyPnl(
+            user_id=user.id, day=entry["day"], updated_at=_parse_dt(entry.get("updated_at")),
+            returns_json=entry.get("returns_json", "{}"), basis_json="{}",
+            pnl_cny=entry.get("pnl_cny"), pnl_usd=entry.get("pnl_usd"),
+            status=entry.get("status", "baseline"), note=entry.get("note", ""),
+            coverage_complete=False,
+        ))
+    seen.clear()
+    for entry in data.snapshots:
+        if not _valid_day(entry.get("day")) or entry["day"] in seen:
+            continue
+        seen.add(entry["day"])
+        session.add(Snapshot(user_id=user.id, day=entry["day"], ts=_parse_dt(entry.get("ts")),
+                             total_cny=entry.get("total_cny", 0), total_usd=entry.get("total_usd", 0)))
     session.commit()
 
     return {

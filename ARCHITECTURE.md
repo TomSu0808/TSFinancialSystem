@@ -182,3 +182,14 @@ FinancialSystem/
 - 前端单独：`frontend/` 下 `npm run dev`
 - 测试：`backend/` 下 `.\.venv\Scripts\pytest tests/ -v`
 - Windows 注意：用 PowerShell 直接调 `.\.venv\Scripts\python.exe`，勿在 Git Bash 跑 Store 版 Python。
+
+
+## 每日盈亏与登录刷新（2026-09-12）
+
+`dailypnl` 独立保存每日累计收益基准和原币种日差额，不从资产总额差推断盈亏。
+`GET /api/snapshots/daily-pnl` 返回当前用户的日盈亏；`POST /api/automation/run-now?reason=login` 记录登录自动刷新。
+全量定时任务同时保存资产快照和日盈亏，Fly 配置保留一个常驻实例。启动自动创建新表并给旧 `automationrun` 补充 `user_id`。
+备份 v2 增加日盈亏与资产快照，兼容旧格式；恢复后重建日收益基准。
+
+组合摘要的 `as_of` 来自保存的输入数据时点，`latest_task` 独立于旧成功报告。新报告采用固定八节排版契约。
+使用方法、计算限制、发布配置及验收说明见 [每日盈亏与组合分析](docs/daily-pnl-and-portfolio-analysis.md)。

@@ -18,8 +18,10 @@ from models import (
     day_change,
     market_value,
     profit,
+    has_valuation,
 )
 from routers.fx import get_or_create_rate
+from job_locks import serialized_refresh
 
 router = APIRouter(prefix="/api/summary", tags=["summary"])
 
@@ -40,9 +42,12 @@ def _upsert_daily_snapshot(session: Session, user_id: int, total_cny: float, tot
         )
     session.add(snap)
     session.commit()
+    from daily_pnl_service import record_daily_pnl
+    record_daily_pnl(session, user_id)
 
 
 @router.get("")
+@serialized_refresh
 def get_summary(
     currency: Currency = Query(Currency.CNY, description="展示币种 CNY/USD"),
     session: Session = Depends(get_session),
@@ -84,7 +89,7 @@ def get_summary(
         total_cny += mv * rate
         change_cny += dc * rate
         cb = cost_basis(h)
-        if cb is not None:
+        if cb is not None and has_valuation(h) and h.status == HoldingStatus.open:
             cost_cny += cb * rate
             profit_cny += (profit(h) or 0.0) * rate
         realized_pnl_cny += (h.realized_pnl or 0.0) * rate

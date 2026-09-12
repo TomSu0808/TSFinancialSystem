@@ -20,7 +20,7 @@ import Transactions from './pages/Transactions.jsx'
 import Alerts from './pages/Alerts.jsx'
 import Login from './pages/Login.jsx'
 import {
-  getStoredUser, getToken, logout, exportBackup, importBackup,
+  getStoredUser, getToken, logout, exportBackup, importBackup, ensureLoginRefresh,
   changePassword, changeEmail, resendVerification, verifyEmail, setSecurityQuestion,
   listAIKeys, saveAIKey, deleteAIKey, testAIKey,
 } from './api'
@@ -143,6 +143,10 @@ export default function App() {
         })
         .catch(() => message.error('验证链接无效或已过期'))
     }
+  }, [user?.id])
+
+  useEffect(() => {
+    if (user) ensureLoginRefresh().catch(() => {})
   }, [user?.id])
 
   const doLogout = () => {

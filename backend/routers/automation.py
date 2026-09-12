@@ -3,7 +3,7 @@ import asyncio
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from auth import get_current_user
@@ -28,7 +28,7 @@ def get_status(
         AUTO_REFRESH_TIMEZONE, AUTO_REFRESH_ON_STARTUP,
     )
     from automation_service import get_last_run
-    last = get_last_run(session)
+    last = get_last_run(session, user.id)
     return {
         "enabled": AUTO_REFRESH_ENABLED,
         "schedule_time": AUTO_REFRESH_TIME,
@@ -41,6 +41,7 @@ def get_status(
 
 @router.post("/run-now")
 async def run_now(
+    reason: str = Query("manual", pattern="^(manual|login)$"),
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
@@ -50,7 +51,7 @@ async def run_now(
 
     async with _run_lock:
         from automation_service import run_single_user_job
-        run = await asyncio.to_thread(run_single_user_job, session, user.id)
+        run = await asyncio.to_thread(run_single_user_job, session, user.id, reason)
         return run.model_dump()
 
 
@@ -62,6 +63,7 @@ def list_runs(
     """返回最近 20 次自动化任务记录。"""
     runs = session.exec(
         select(AutomationRun)
+        .where((AutomationRun.user_id == user.id) | ((AutomationRun.user_id == None) & (AutomationRun.triggered_by == "scheduler")))
         .order_by(AutomationRun.started_at.desc())
         .limit(20)
     ).all()

@@ -23,7 +23,25 @@ const saveAuth = ({ access_token, user }) => {
 export const clearAuth = () => {
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(USER_KEY)
+  loginRefreshToken = null
+  loginRefreshPromise = null
 }
+
+// One refresh per authenticated browser session, shared across pages and StrictMode effects.
+let loginRefreshToken = null
+let loginRefreshPromise = null
+export const ensureLoginRefresh = () => {
+  const token = getToken()
+  if (!token) return Promise.resolve(null)
+  if (loginRefreshToken !== token || !loginRefreshPromise) {
+    loginRefreshToken = token
+    loginRefreshPromise = client.post('/automation/run-now', null, { params: { reason: 'login' } })
+      .then((r) => r.data)
+  }
+  return loginRefreshPromise
+}
+
+export const getDailyPnl = (params = {}) => client.get('/snapshots/daily-pnl', { params }).then((r) => r.data)
 
 // 每个请求自动带上 Bearer token
 client.interceptors.request.use((cfg) => {
