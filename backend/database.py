@@ -86,6 +86,7 @@ def _migrate_add_user_id() -> None:
             "status": "VARCHAR DEFAULT 'open'",
             "realized_pnl": "FLOAT DEFAULT 0",
             "realized_income": "FLOAT DEFAULT 0",
+            "cost_value": "FLOAT",
         },
         "note": {
             "user_id": "INTEGER",

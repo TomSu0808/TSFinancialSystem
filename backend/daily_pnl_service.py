@@ -51,7 +51,7 @@ def record_daily_pnl(session: Session, user_id: int, now=None) -> DailyPnl:
         ):
             stale.append(h.id)
         if h.source == "manual":
-            manual_basis.append((h.id, c, h.quantity, h.cost_price))
+            manual_basis.append((h.id, c, h.quantity, h.cost_price, h.cost_value))
 
     def txn_digest(cutoff):
         # 入出金不影响投资收益，未来交易不计入当日检查点。

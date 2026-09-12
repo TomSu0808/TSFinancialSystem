@@ -79,7 +79,7 @@ def update_holding(
     holding = _owned(session, holding_id, user)
     values = data.model_dump(exclude_unset=True)
     if holding.source == HoldingSource.derived and (
-        {"quantity", "cost_price", "symbol", "currency", "platform_id"} & set(values)
+        {"quantity", "cost_price", "cost_value", "symbol", "currency", "platform_id"} & set(values)
     ):
         raise HTTPException(400, "该持仓由交易流水驱动，请通过交易记录修改")
     if "platform_id" in values:

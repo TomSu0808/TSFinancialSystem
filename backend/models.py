@@ -105,7 +105,8 @@ class Holding(SQLModel, table=True):
     name: str = ""
     quantity: Optional[float] = None       # 数量/股数/份额
     manual_value: Optional[float] = None   # 直接填的市值（无法抓价时用）
-    cost_price: Optional[float] = None     # 成本价（可选，用于盈亏）
+    cost_price: Optional[float] = None     # 成本价（单价，可选，用于盈亏）
+    cost_value: Optional[float] = None     # 投入总成本/本金（本币，可选；基金等不知道单价时用）
     current_price: Optional[float] = None  # 当前价（刷新写入）
     prev_close: Optional[float] = None     # 昨收（刷新写入，算今日涨跌）
     price_updated_at: Optional[datetime] = None
@@ -213,6 +214,7 @@ class HoldingCreate(SQLModel):
     quantity: Optional[float] = None
     manual_value: Optional[float] = None
     cost_price: Optional[float] = None
+    cost_value: Optional[float] = None
     source: HoldingSource = HoldingSource.manual
 
 
@@ -226,6 +228,7 @@ class HoldingUpdate(SQLModel):
     quantity: Optional[float] = None
     manual_value: Optional[float] = None
     cost_price: Optional[float] = None
+    cost_value: Optional[float] = None
 
 
 _USERNAME_RE = re.compile(r'^[a-zA-Z0-9_-]{3,32}$')
@@ -628,7 +631,9 @@ def day_change(h: Holding) -> float:
 
 
 def cost_basis(h: Holding) -> Optional[float]:
-    """成本（本币）：数量×成本价（Decimal 精度）。缺数量或成本价则返回 None。"""
+    """成本（本币）：优先投入总成本 cost_value，否则数量×成本价（Decimal 精度）。缺两者则返回 None。"""
+    if h.cost_value is not None:
+        return float(h.cost_value)
     if h.quantity is not None and h.cost_price is not None:
         from decimal_utils import d_mul, to_float
         return to_float(d_mul(h.quantity, h.cost_price))

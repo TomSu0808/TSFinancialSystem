@@ -11,7 +11,8 @@ export const dayChange = (h) =>
       ? h.quantity * (h.current_price - h.prev_close) : 0
 
 export const costBasis = (h) =>
-  (h.quantity != null && h.cost_price != null ? h.quantity * h.cost_price : null)
+  (h.cost_value != null ? h.cost_value
+    : (h.quantity != null && h.cost_price != null ? h.quantity * h.cost_price : null))
 
 export const profitOf = (h) => {
   const cb = costBasis(h)

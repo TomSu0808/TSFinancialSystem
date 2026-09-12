@@ -18,6 +18,25 @@
 
 <!-- 在下面这条横线下方追加新记录，保持最新在最上 -->
 
+## [功能] - 2026-09-12 基金投入成本与富途风盈亏日历
+
+### 类型：✨新增
+
+- **基金投入总成本 `cost_value`**：持仓新增「投入成本（总金额，可选）」字段。基金这类不知道「单价」的资产，现在填「基金代码 + 份额 + 投入总金额」即可自动抓净值算盈亏：`盈亏 = 份额 × 净值 − 投入总成本`，日盈亏 = `份额 × (今日净值 − 昨日净值)`；投入成本变动会自动重新建立基准，不会误计为当日盈亏。
+- **盈亏口径**：`cost_basis()` 优先用 `cost_value`，缺省时回退 `数量 × 成本价`；derived（交易驱动）持仓禁止直接改成本字段；备份导出/导入往返保留 `cost_value`。
+- **每日盈亏日历**：抽屉从「表格/列表」重做为富途牛牛风月视图——每格显示当天盈亏金额（红涨绿跌、紧凑缩写如 `+1.2万`），支持月份翻页、当月合计、今日高亮描边、悬停看明细；隐私模式显示 `·` 且不着色；桌面端保留列表视图，手机端保留列表视图。
+- **测试**：新增 6 项测试（成本优先级、基金日盈亏、成本变更重基准、备份往返），后端全量 309 项测试通过，前端 `npm run build` 通过。
+
+### 影响范围
+
+- **后端**：`models.py`（Holding/HoldingCreate/HoldingUpdate 加 `cost_value`、`cost_basis` 优先逻辑）、`database.py`（holding 迁移补列）、`daily_pnl_service.py`（手动基准计入 `cost_value`）、`routers/holdings.py`（derived 禁改字段）、`routers/backup.py`（导出导入保留）、`tests/test_position.py`、`tests/test_daily_pnl.py`
+- **前端**：`holdings.js`（`costBasis` 优先 `cost_value`）、`pages/PlatformDetail.jsx`（新增投入成本输入项）、`components/DailyPnlDrawer.jsx`（重写为月历）
+
+### 注意事项
+
+- **数据库结构变更**：`holding` 表新增 `cost_value` 列，重启后端自动迁移补列（additive、幂等），无需手动操作。
+- 已推送 GitHub 并部署 Fly.io（`flyctl deploy --app tsfinancialsystem`）。
+
 ## [维护] - 2026-09-12 清理重复环境与遗留依赖
 
 ### 类型：⚡优化 / 📝文档

@@ -94,6 +94,59 @@ def test_manual_capital_change_rebaselines(session, user):
     assert row.status == "adjusted" and row.pnl_cny is None
 
 
+def _fund(session, user, now, cost_value=12000.0, price=13.0):
+    platform = Platform(user_id=user.id, name="Fund")
+    session.add(platform)
+    session.commit()
+    h = Holding(user_id=user.id, platform_id=platform.id, name="某基金", symbol="110022",
+                market="FUND", currency=Currency.CNY, asset_type="fund",
+                quantity=1000.0, cost_value=cost_value,
+                current_price=price, price_updated_at=now)
+    session.add(h)
+    session.commit()
+    return h
+
+
+def test_daily_pnl_for_fund_with_shares_and_total_cost(session, user):
+    """场外基金：份额 + 投入总成本 + 抓到的净值，日盈亏 = 份额×(今日净值−昨日净值)。"""
+    now = datetime(2026, 9, 10, 23, 55)
+    h = _fund(session, user, now)
+    first = record_daily_pnl(session, user.id, now)
+    assert first.status == "baseline"
+    tomorrow = now + timedelta(days=1)
+    h.current_price = 13.2
+    h.price_updated_at = tomorrow
+    session.add(h)
+    session.commit()
+    row = record_daily_pnl(session, user.id, tomorrow)
+    assert row.pnl_cny == 200  # 1000 × (13.2 − 13.0)
+
+
+def test_manual_total_cost_change_rebaselines(session, user):
+    """投入总成本变化应触发重新建立基准，而不是把成本变化当作当日盈亏。"""
+    now = datetime(2026, 9, 10, 23, 55)
+    h = _fund(session, user, now)
+    record_daily_pnl(session, user.id, now)
+    tomorrow = now + timedelta(days=1)
+    h.current_price = 13.2
+    h.price_updated_at = tomorrow
+    h.cost_value = 12500.0
+    session.add(h)
+    session.commit()
+    row = record_daily_pnl(session, user.id, tomorrow)
+    assert row.status == "adjusted" and row.pnl_cny is None
+
+
+def test_backup_roundtrip_preserves_cost_value(client, session, user):
+    """备份/恢复应保留基金的投入总成本。"""
+    _fund(session, user, datetime.utcnow(), cost_value=12000.0)
+    backup = client.get('/api/backup').json()
+    assert backup['holdings'][0]['cost_value'] == 12000.0
+    assert client.post('/api/backup/import', json=backup).status_code == 200
+    hs = session.exec(select(Holding).where(Holding.user_id == user.id)).all()
+    assert any(h.cost_value == 12000.0 for h in hs)
+
+
 def test_api_isolation_and_backup_roundtrip(client, session, user):
     now = datetime.utcnow()
     h = seed(session, user, now - timedelta(days=1))

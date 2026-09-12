@@ -455,17 +455,22 @@ export default function PlatformDetail() {
             </Row>
           ) : (
             <Row gutter={8}>
-              <Col xs={24} md={8}>
+              <Col xs={24} md={12}>
                 <Form.Item name="quantity" label="持有数量/份额">
                   <InputNumber style={{ width: '100%' }} placeholder="股数/份额" disabled={editing?.source === 'derived'} />
                 </Form.Item>
               </Col>
-              <Col xs={24} md={8}>
-                <Form.Item name="cost_price" label="成本价（可选）">
+              <Col xs={24} md={12}>
+                <Form.Item name="cost_price" label="成本价（单价，可选）">
                   <InputNumber style={{ width: '100%' }} placeholder="用于盈亏" disabled={editing?.source === 'derived'} />
                 </Form.Item>
               </Col>
-              <Col xs={24} md={8}>
+              <Col xs={24} md={12}>
+                <Form.Item name="cost_value" label="投入成本（总金额，可选）" extra="基金等：填总投入金额，盈亏 = 份额×净值 − 投入成本">
+                  <InputNumber style={{ width: '100%' }} placeholder="总投入本金" disabled={editing?.source === 'derived'} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
                 <Form.Item name="manual_value" label="手填市值">
                   <InputNumber style={{ width: '100%' }} placeholder="现金/债券等" disabled={editing?.source === 'derived'} />
                 </Form.Item>

@@ -178,6 +178,29 @@ def test_profit_decimal():
     assert abs(p - 50.0) < 1e-9
 
 
+def test_cost_basis_prefers_total_cost_value():
+    """有 cost_value（投入总成本）时优先用它，忽略单价成本。"""
+    from models import cost_basis
+    h = Holding(quantity=1000.0, cost_price=12.0, cost_value=15000.0)
+    assert cost_basis(h) == 15000.0  # 不是 1000×12=12000
+
+
+def test_cost_basis_falls_back_to_unit_cost():
+    """没有 cost_value 时回退到 数量×成本价。"""
+    from models import cost_basis
+    h = Holding(quantity=100.0, cost_price=10.0)
+    assert abs(cost_basis(h) - 1000.0) < 1e-9
+
+
+def test_profit_uses_total_cost_value_for_fund():
+    """场外基金：盈亏 = 份额×净值 − 投入总成本。"""
+    from models import profit
+    h = Holding(quantity=1000.0, cost_value=12000.0, current_price=13.0)
+    p = profit(h)
+    assert p is not None
+    assert abs(p - 1000.0) < 1e-9  # 1000 * 13 - 12000
+
+
 def test_day_change_decimal():
     """day_change 使用 Decimal。"""
     from models import day_change
