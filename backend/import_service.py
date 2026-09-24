@@ -17,7 +17,6 @@ from importers import BROKER_IMPORTERS, BaseImporter, ImportedTransactionDraft
 from models import (
     Currency,
     Holding,
-    HoldingSource,
     ImportSession,
     Platform,
     Transaction,
@@ -25,7 +24,6 @@ from models import (
     TxnAction,
     User,
 )
-from position import recompute_holding, resolve_derived_holding
 from transaction_validation import validate_transaction
 
 
@@ -111,11 +109,11 @@ def preview_import(
     # 加载平台映射和持仓状态（用于超卖检测）
     plat_map = _platforms_by_name(session, user)
     holdings_state = {
-        (h.platform_id, h.symbol, str(h.currency)): (h.quantity or 0.0)
+        (h.platform_id, h.symbol, h.currency.value): (h.quantity or 0.0)
         for h in session.exec(
             select(Holding).where(
                 Holding.user_id == user.id,
-                Holding.source == HoldingSource.derived,
+                Holding.manual_value.is_(None),
             )
         ).all()
     }
@@ -184,7 +182,10 @@ def preview_import(
                 continue
 
         # 超卖检测
-        if d.action == "sell" and d.quantity is not None and pid is not None:
+        if d.action == "adjust" and d.quantity is not None and pid is not None:
+            pos_key = (pid, d.symbol, d.currency)
+            running_positions[pos_key] = d.quantity - holdings_state.get(pos_key, 0.0)
+        elif d.action == "sell" and d.quantity is not None and pid is not None:
             pos_key = (pid, d.symbol, str(d.currency))
             base_qty = holdings_state.get(pos_key, 0.0)
             running_delta = running_positions.get(pos_key, 0.0)
@@ -371,9 +372,18 @@ def commit_import(
             error_details.append({"row": rn, "error": f"创建交易失败: {e}"})
             continue
 
+        # 与手工记账共用持仓校验及手填持仓转入，避免导入绕过校准规则。
+        from routers.transactions import _check_oversell
+        from position import prepare_position
+        try:
+            _check_oversell(session, user, txn)
+            prepare_position(session, user, txn)
+        except HTTPException as e:
+            session.rollback()
+            error_details.append({"row": rn, "error": e.detail})
+            continue
         session.add(txn)
-        session.commit()
-        session.refresh(txn)
+        session.flush()
 
         # 同步持仓
         try:
@@ -381,14 +391,15 @@ def commit_import(
         except Exception as e:
             error_details.append({"row": rn, "error": f"同步持仓失败: {e}"})
             # 删除已创建的交易
-            session.delete(txn)
-            session.commit()
+            session.rollback()
             continue
 
         # 收集现金重算维度
         if action in (TxnAction.deposit, TxnAction.withdraw) and pid is not None and currency is not None:
             cash_recalc_keys.add((pid, currency))
 
+        session.commit()
+        session.refresh(txn)
         created_txn_ids.append(txn.id)
         created += 1
 
@@ -413,40 +424,5 @@ def commit_import(
 
 
 def _sync_txn_holding(session, txn, user):
-    """本地导入：复用 transactions router 的同名函数逻辑。
-
-    deposit / withdraw 不再手动增减 manual_value，而是由 recalc_cash 统一重算。
-    """
-    from position import recompute_holding, resolve_derived_holding
-
-    affected = set()
-    if txn.holding_id is not None:
-        affected.add(txn.holding_id)
-
-    if txn.action in (TxnAction.buy, TxnAction.sell, TxnAction.dividend):
-        holding = resolve_derived_holding(
-            session, user, txn.platform_id, txn.symbol, txn.currency,
-            name=txn.name, create_if_missing=(txn.action == TxnAction.buy),
-        )
-        if holding is not None:
-            if txn.holding_id != holding.id:
-                txn.holding_id = holding.id
-                session.add(txn)
-                session.commit()
-            affected.add(holding.id)
-    elif txn.action in (TxnAction.deposit, TxnAction.withdraw):
-        # 现金：只清空 holding_id，不做手动增减
-        if txn.holding_id is not None:
-            affected.add(txn.holding_id)
-            txn.holding_id = None
-            session.add(txn)
-            session.commit()
-        # 现金重算在 commit_import 结尾统一做，此处不单独调 recalc_cash
-    else:
-        if txn.holding_id is not None:
-            txn.holding_id = None
-            session.add(txn)
-            session.commit()
-
-    for hid in affected:
-        recompute_holding(session, hid)
+    from routers.transactions import _sync_txn_holding as sync
+    sync(session, txn, user)

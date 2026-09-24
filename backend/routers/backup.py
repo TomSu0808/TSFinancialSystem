@@ -62,6 +62,7 @@ def export_backup(
                 "source": h.source.value,
                 "status": h.status.value,
                 "realized_pnl": h.realized_pnl,
+                "realized_pnl_incomplete": h.realized_pnl_incomplete,
                 "realized_income": h.realized_income,
             }
             for h in holds
@@ -155,6 +156,7 @@ def import_backup(
             prev_close=h.get("prev_close"),
             source=h.get("source", "manual"), status=h.get("status", "open"),
             realized_pnl=h.get("realized_pnl", 0.0),
+            realized_pnl_incomplete=h.get("realized_pnl_incomplete", False),
             realized_income=h.get("realized_income", 0.0),
         )
         session.add(holding)
@@ -225,6 +227,7 @@ def import_backup(
         session.add(DailyPnl(
             user_id=user.id, day=entry["day"], updated_at=_parse_dt(entry.get("updated_at")),
             returns_json=entry.get("returns_json", "{}"), basis_json="{}",
+            details_json=entry.get("details_json", "[]"),
             pnl_cny=entry.get("pnl_cny"), pnl_usd=entry.get("pnl_usd"),
             status=entry.get("status", "baseline"), note=entry.get("note", ""),
             coverage_complete=False,

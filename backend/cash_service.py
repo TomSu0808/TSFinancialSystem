@@ -31,7 +31,7 @@ def recalc_cash(
 ) -> Holding:
     """按 (user, platform, currency) 从 deposit/withdraw 交易流水重算现金余额。
 
-    返回更新后的 cash holding（一定存在）。
+    返回更新后的 cash holding（一定存在）；只 flush，由调用方统一提交。
     """
     # 查找所有该维度的 deposit/withdraw 交易
     txns = session.exec(
@@ -77,13 +77,13 @@ def recalc_cash(
             manual_value=0.0,
         )
         session.add(cash)
-        session.commit()
+        session.flush()
         session.refresh(cash)
 
     cash.manual_value = max(balance, 0.0)
     cash.price_updated_at = datetime.utcnow()
     session.add(cash)
-    session.commit()
+    session.flush()
     session.refresh(cash)
     return cash
 

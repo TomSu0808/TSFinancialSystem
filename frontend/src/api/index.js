@@ -42,6 +42,8 @@ export const ensureLoginRefresh = () => {
 }
 
 export const getDailyPnl = (params = {}) => client.get('/snapshots/daily-pnl', { params }).then((r) => r.data)
+export const getDailyPnlDetail = (day, params = {}) =>
+  client.get(`/snapshots/daily-pnl/${day}`, { params }).then((r) => r.data)
 
 // 每个请求自动带上 Bearer token
 client.interceptors.request.use((cfg) => {

@@ -16,10 +16,12 @@ import {
 } from '../constants'
 
 const ACTION_COLOR = {
+  adjust: 'cyan',
   buy: 'red', sell: 'green', dividend: 'gold', deposit: 'blue', withdraw: 'purple', other: 'default',
 }
 
 const txnAmount = (t) => {
+  if (t.action === 'adjust') return null
   if (t.amount != null) return t.amount
   if (t.quantity != null && t.price != null) {
     const gross = t.quantity * t.price
@@ -42,6 +44,8 @@ export default function Transactions() {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form] = Form.useForm()
+  const selectedAction = Form.useWatch('action', form)
+  const isAdjustment = selectedAction === 'adjust'
   const [filterForm] = Form.useForm()
 
   // CSV import state (old)
@@ -131,10 +135,15 @@ export default function Transactions() {
   const submit = async () => {
     const v = await form.validateFields()
     const payload = { ...v, date: v.date ? v.date.format('YYYY-MM-DD') : '' }
+    if (payload.action === 'adjust') {
+      payload.fee = null
+      payload.amount = null
+      payload.price = payload.price ?? null
+    }
     try {
       if (editing) await updateTransaction(editing.id, payload)
       else await createTransaction(payload)
-      const drives = ['buy', 'sell', 'dividend'].includes(payload.action)
+      const drives = ['buy', 'sell', 'adjust', 'dividend'].includes(payload.action)
       message.success(drives ? '已保存，相关持仓已同步' : '已保存')
       setOpen(false)
       load()
@@ -430,7 +439,7 @@ export default function Transactions() {
       </Form>
 
       <div style={{ marginBottom: 8, color: '#888', fontSize: 13 }}>
-        共 {data.length} 条交易 · 买入/卖出会自动更新对应持仓（按 平台 + 代码 + 币种 匹配）；分红计入已实现收益
+        共 {data.length} 条记录 · 买卖自动更新持仓；漏记买入可选择「持仓校准」，填写卖出前总数量及平均成本
       </div>
 
       <Table
@@ -453,6 +462,10 @@ export default function Transactions() {
         width={560}
       >
         <Form form={form} layout="vertical">
+          {isAdjustment && <div style={{ marginBottom: 16, color: '#666' }}>
+            校准数量是该时点的总持仓，并非增加数量；价格填写平均成本（可留空）。不产生现金流。
+            同日按录入顺序生效；补充历史成本请编辑原校准记录。
+          </div>}
           <Space style={{ display: 'flex' }}>
             <Form.Item name="date" label="日期" rules={[{ required: true, message: '请选日期' }]} style={{ flex: 1 }}>
               <DatePicker style={{ width: '100%' }} />
@@ -468,25 +481,25 @@ export default function Transactions() {
             <Form.Item name="name" label="标的名称" style={{ flex: 1 }}>
               <Input placeholder="如：Apple、贵州茅台" />
             </Form.Item>
-            <Form.Item name="platform_id" label="平台" style={{ flex: 1 }}>
+            <Form.Item name="platform_id" label="平台" rules={isAdjustment ? [{ required: true, message: '请选择平台' }] : []} style={{ flex: 1 }}>
               <Select allowClear placeholder="可选" options={platforms.map((p) => ({ value: p.id, label: p.name }))} />
             </Form.Item>
           </Space>
-          <Form.Item name="symbol" label="代码（可选）">
+          <Form.Item name="symbol" label={isAdjustment ? '代码' : '代码（可选）'} rules={isAdjustment ? [{ required: true, message: '请填写代码' }] : []}>
             <Input placeholder="如 AAPL、600519" />
           </Form.Item>
           <Space style={{ display: 'flex' }}>
-            <Form.Item name="quantity" label="数量" style={{ flex: 1 }}>
-              <InputNumber style={{ width: '100%' }} placeholder="股数/份额" />
+            <Form.Item name="quantity" label={isAdjustment ? '校准后的总数量' : '数量'} rules={isAdjustment ? [{ required: true, message: '请填写总数量' }] : []} style={{ flex: 1 }}>
+              <InputNumber min={0} style={{ width: '100%' }} placeholder="股数/份额" />
             </Form.Item>
-            <Form.Item name="price" label="价格" style={{ flex: 1 }}>
-              <InputNumber style={{ width: '100%' }} placeholder="成交价" />
+            <Form.Item name="price" label={isAdjustment ? '平均成本（可选）' : '价格'} style={{ flex: 1 }}>
+              <InputNumber min={0} style={{ width: '100%' }} placeholder={isAdjustment ? '留空则盈亏待补充' : '成交价'} />
             </Form.Item>
-            <Form.Item name="fee" label="费用" style={{ flex: 1 }}>
+            <Form.Item name="fee" label="费用" hidden={isAdjustment} style={{ flex: 1 }}>
               <InputNumber style={{ width: '100%' }} placeholder="手续费" />
             </Form.Item>
           </Space>
-          <Form.Item name="amount" label="金额（可选，留空按 量×价±费 估算）">
+          <Form.Item name="amount" label="金额（可选，留空按 量×价±费 估算）" hidden={isAdjustment}>
             <InputNumber style={{ width: '100%' }} placeholder="入金/出金/分红可直接填金额" />
           </Form.Item>
           <Form.Item name="note" label="备注">
@@ -729,7 +742,7 @@ export default function Transactions() {
           </div>
           <div style={{ fontSize: 12, color: '#888', marginTop: 6, lineHeight: 1.6 }}>
             <b>date</b>：YYYY-MM-DD &nbsp;·&nbsp;
-            <b>action</b>：buy / sell / dividend / deposit / withdraw / other &nbsp;·&nbsp;
+            <b>action</b>：buy / sell / adjust（持仓校准） / dividend / deposit / withdraw / other &nbsp;·&nbsp;
             <b>platform</b>：需与账户名称完全匹配，可留空 &nbsp;·&nbsp;
             <b>currency</b>：CNY / USD / HKD，默认 CNY &nbsp;·&nbsp;
             数字字段可留空

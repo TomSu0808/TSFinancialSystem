@@ -28,6 +28,7 @@ export const MARKETS = [
 export const TXN_ACTIONS = [
   { value: 'buy', label: '买入' },
   { value: 'sell', label: '卖出' },
+  { value: 'adjust', label: '持仓校准' },
   { value: 'dividend', label: '分红/利息' },
   { value: 'deposit', label: '入金' },
   { value: 'withdraw', label: '出金' },

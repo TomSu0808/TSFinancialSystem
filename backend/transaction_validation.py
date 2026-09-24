@@ -4,6 +4,7 @@
 避免负数、缺失值污染持仓、现金和收益。
 """
 import re
+import math
 from datetime import datetime as _dt
 from typing import List, Optional
 
@@ -40,7 +41,7 @@ def validate_transaction(
 
     # ── 通用校验 ──
     # action 必须有效（TxnAction 枚举已保证，但防御性检查）
-    if action not in (TxnAction.buy, TxnAction.sell, TxnAction.deposit,
+    if action not in (TxnAction.buy, TxnAction.sell, TxnAction.adjust, TxnAction.deposit,
                       TxnAction.withdraw, TxnAction.dividend, TxnAction.other):
         errors.append(f"无效的交易类型: {action}")
 
@@ -55,6 +56,18 @@ def validate_transaction(
                 errors.append(f"日期无效：{date}")
 
     # ── buy / sell 校验 ──
+    for field, value in (("数量", quantity), ("价格", price), ("手续费", fee), ("金额", amount)):
+        if value is not None and not math.isfinite(value):
+            errors.append(f"{field}必须是有限数值")
+
+    if action == TxnAction.adjust:
+        if quantity is None or quantity < 0:
+            errors.append("校准后的持仓数量必须大于等于 0")
+        if not platform_id or not symbol:
+            errors.append("持仓校准必须指定平台和代码")
+        if fee not in (None, 0) or amount not in (None, 0):
+            errors.append("持仓校准不产生现金流，请留空手续费和金额")
+
     if action in (TxnAction.buy, TxnAction.sell):
         if quantity is None or quantity <= 0:
             errors.append(f"{'买入' if action == TxnAction.buy else '卖出'}数量必须是正数")

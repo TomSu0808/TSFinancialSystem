@@ -1,4 +1,4 @@
-"""交易流水增删改查（独立账本，不自动改持仓；按用户隔离）。"""
+"""交易及持仓校准记录增删改查，按用户隔离并驱动持仓重算。"""
 import csv
 import io
 from datetime import datetime as _dt
@@ -22,7 +22,8 @@ from models import (
     TxnAction,
     User,
 )
-from position import recompute_holding, resolve_derived_holding
+from position import (recompute_holding, resolve_derived_holding, replay_transactions,
+                      resolve_position, opening_transaction, prepare_position)
 from transaction_validation import validate_transaction
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
@@ -49,59 +50,36 @@ def _check_oversell(
     txn: Transaction,
     exclude_txn_id: Optional[int] = None,
 ) -> None:
-    """校验 sell 交易不会导致超卖（普通账户禁止卖空）。
-
-    - 新建 sell 时：检查当前持仓数量是否足够。
-    - 修改交易为 sell / 修改 sell 数量时：重放除该交易外的所有流水，
-      检查修改后的卖出量是否超过可用数量。
-    - 全部清仓（卖出 == 当前数量）允许，status 将变为 closed。
-    """
-    if txn.action != TxnAction.sell:
-        return
-    sell_qty = txn.quantity or 0.0
-    if sell_qty <= 0:
-        return  # 无效卖出量由其他逻辑处理
-
-    # 找到对应的 derived 持仓
-    holding = resolve_derived_holding(
-        session, user, txn.platform_id, txn.symbol, txn.currency,
-        name=txn.name, create_if_missing=False,
-    )
-    if holding is None:
-        # 没有持仓却要卖出
-        raise HTTPException(
-            400,
-            f"无法卖出 {txn.symbol or txn.name}："
-            f"该标的在平台内没有持仓（需先有买入记录）。",
-        )
-
-    from position import replay_transactions
-
-    if exclude_txn_id is not None:
-        # 更新场景：重放除当前交易外的所有流水
-        all_txns = session.exec(
-            select(Transaction).where(
-                Transaction.holding_id == holding.id,
+    """按时间线检查校准及买卖；移动交易时也检查原持仓。"""
+    actions = (TxnAction.buy, TxnAction.sell, TxnAction.adjust)
+    holding = resolve_position(session, user, txn) if txn.action in actions else None
+    with session.no_autoflush:
+        if txn.holding_id is not None and (holding is None or txn.holding_id != holding.id):
+            old_txns = session.exec(select(Transaction).where(
+                Transaction.holding_id == txn.holding_id,
                 Transaction.id != exclude_txn_id,
-            )
-        ).all()
-        st = replay_transactions(all_txns)
-        available = st.quantity
-    else:
-        # 新建场景：直接使用当前持仓数量
-        available = holding.quantity or 0.0
-
-    if sell_qty > available + 1e-9:
-        raise HTTPException(
-            400,
-            f"卖出数量（{sell_qty}）超过当前可用持仓（{available}）。"
-            f"普通账户不允许超卖。如需清仓，卖出数量应等于当前持仓。",
-        )
+            )).all()
+            replay_transactions(old_txns, check_oversell=True)
+        if txn.action not in actions:
+            return
+        if holding is None and txn.action == TxnAction.sell:
+            raise HTTPException(400, "尚无可用持仓，请先在交易记录中选择「持仓校准」，填入卖出前数量。")
+        if holding is not None and holding.source == HoldingSource.derived:
+            txns = session.exec(select(Transaction).where(
+                Transaction.holding_id == holding.id,
+                Transaction.id != exclude_txn_id if exclude_txn_id is not None else True,
+            )).all()
+        elif holding is not None and txn.action != TxnAction.adjust:
+            txns = [opening_transaction(holding, txn.date, before_existing=txn.id is not None)]
+        else:
+            txns = []
+        candidate = txn.model_copy(update={"id": txn.id or (max((t.id or 0 for t in txns), default=0) + 1)})
+        replay_transactions([*txns, candidate], check_oversell=True)
 
 
 def _sync_txn_holding(session: Session, txn: Transaction, user: User) -> None:
-    """(重新)绑定 buy/sell/dividend 流水到其 derived 持仓，并重算受影响的持仓。
-    买入可自动建仓；卖出/分红只绑定已存在的 derived 持仓。改了 symbol/platform/currency
+    """(重新)绑定 buy/sell/adjust/dividend 流水并重算受影响的持仓。
+    买入及校准可自动建仓；卖出/分红绑定已有持仓。改了 symbol/platform/currency
     会重绑到新持仓，新旧持仓都会重算。非持仓动作清空 holding_id，避免悬空 FK。
 
     deposit / withdraw 通过 cash_service.recalc_cash 统一重算现金余额。
@@ -109,31 +87,35 @@ def _sync_txn_holding(session: Session, txn: Transaction, user: User) -> None:
     affected = set()
     if txn.holding_id is not None:
         affected.add(txn.holding_id)  # 旧绑定总要重算（动作/标的变更后释放其影响）
-    if txn.action in (TxnAction.buy, TxnAction.sell, TxnAction.dividend):
+    if txn.action in (TxnAction.buy, TxnAction.sell, TxnAction.adjust, TxnAction.dividend):
         holding = resolve_derived_holding(
             session, user, txn.platform_id, txn.symbol, txn.currency,
-            name=txn.name, create_if_missing=(txn.action == TxnAction.buy),
+            name=txn.name, create_if_missing=(txn.action in (TxnAction.buy, TxnAction.adjust)),
         )
         if holding is not None:
             if txn.holding_id != holding.id:
                 txn.holding_id = holding.id
                 session.add(txn)
-                session.commit()
+                session.flush()
             affected.add(holding.id)
+        elif txn.holding_id is not None:
+            txn.holding_id = None
+            session.add(txn)
+            session.flush()
     elif txn.action in (TxnAction.deposit, TxnAction.withdraw):
         # 现金账本：统一重算
         if txn.holding_id is not None:
             affected.add(txn.holding_id)  # 原 buy/sell 重算
             txn.holding_id = None
             session.add(txn)
-            session.commit()
+            session.flush()
         if txn.platform_id is not None and txn.currency is not None:
             recalc_cash(session, user, txn.platform_id, txn.currency)
     else:
         if txn.holding_id is not None:
             txn.holding_id = None
             session.add(txn)
-            session.commit()
+            session.flush()
     for hid in affected:
         recompute_holding(session, hid)
 
@@ -177,7 +159,7 @@ def _validate_row(row_num: int, row: dict, plat_map: dict) -> tuple:
         try:
             d["action"] = TxnAction(action_str)
         except ValueError:
-            errors.append(f"action 无效：{action_str}，可选：buy/sell/dividend/deposit/withdraw/other")
+            errors.append(f"action 无效：{action_str}，可选：buy/sell/adjust/dividend/deposit/withdraw/other")
 
     # platform（可选；若填写必须匹配当前用户的平台名称）
     plat_str = (row.get("platform") or "").strip()
@@ -243,7 +225,11 @@ def _build_preview(rows_raw: list, plat_map: dict, holdings_state: Optional[dict
         else:
             valid_count += 1
             # 超卖检测：sell 数量不得超过可用数量
-            if data.get("action") == TxnAction.sell and data.get("quantity") is not None:
+            if data.get("action") == TxnAction.adjust and data.get("quantity") is not None:
+                key = (data.get("platform_id"), data.get("symbol", ""), str(data.get("currency", Currency.CNY)))
+                base = (holdings_state or {}).get(key, 0.0)
+                running_positions[key] = data["quantity"] - base
+            elif data.get("action") == TxnAction.sell and data.get("quantity") is not None:
                 cur_str = str(data.get("currency", Currency.CNY))
                 avail = _get_available(
                     data.get("platform_id"),
@@ -350,10 +336,11 @@ def create_transaction(
     txn = Transaction.model_validate(data, update={"user_id": user.id})
     txn.holding_id = None  # always system-resolved; never trust client input
     _check_oversell(session, user, txn)  # 禁止超卖
+    prepare_position(session, user, txn)
     session.add(txn)
-    session.commit()
-    session.refresh(txn)
+    session.flush()
     _sync_txn_holding(session, txn, user)
+    session.commit()
     session.refresh(txn)
     return txn
 
@@ -367,14 +354,13 @@ async def preview_import(
     contents = await file.read()
     plat_map = _platforms_by_name(session, user)
 
-    # 获取当前 derived 持仓状态用于超卖检测
-    from models import Holding, HoldingSource
+    # 交易驱动及按数量维护的手填持仓均可卖出
     holdings_state = {
         (h.platform_id, h.symbol, str(h.currency)): (h.quantity or 0.0)
         for h in session.exec(
             select(Holding).where(
                 Holding.user_id == user.id,
-                Holding.source == HoldingSource.derived,
+                Holding.manual_value.is_(None),
             )
         ).all()
     }
@@ -396,14 +382,13 @@ async def commit_import(
     contents = await file.read()
     plat_map = _platforms_by_name(session, user)
 
-    # 获取当前 derived 持仓状态用于超卖检测
-    from models import Holding, HoldingSource
+    # 按数量维护的手填持仓也可作为卖出起点
     holdings_state = {
         (h.platform_id, h.symbol, str(h.currency)): (h.quantity or 0.0)
         for h in session.exec(
             select(Holding).where(
                 Holding.user_id == user.id,
-                Holding.source == HoldingSource.derived,
+                Holding.manual_value.is_(None),
             )
         ).all()
     }
@@ -446,12 +431,13 @@ async def commit_import(
         txn = Transaction.model_validate(tc, update={"user_id": user.id})
         txn.holding_id = None
         _check_oversell(session, user, txn)  # CSV 导入也禁止超卖
+        prepare_position(session, user, txn)
         session.add(txn)
-        session.commit()
-        session.refresh(txn)
+        session.flush()
         _sync_txn_holding(session, txn, user)
         imported += 1
 
+    session.commit()
     return {"imported": imported}
 
 
@@ -486,10 +472,11 @@ def update_transaction(
         exclude_txn_id=txn_id,
     )
     _check_oversell(session, user, txn, exclude_txn_id=txn_id)  # 禁止超卖
+    prepare_position(session, user, txn)
     session.add(txn)
-    session.commit()
-    session.refresh(txn)
+    session.flush()
     _sync_txn_holding(session, txn, user)
+    session.commit()
     session.refresh(txn)
     return txn
 
@@ -505,11 +492,17 @@ def delete_transaction(
     action = txn.action
     platform_id = txn.platform_id
     currency = txn.currency
+    if holding_id is not None:
+        remaining = session.exec(select(Transaction).where(
+            Transaction.holding_id == holding_id, Transaction.id != txn_id,
+        )).all()
+        replay_transactions(remaining, check_oversell=True)
     session.delete(txn)
-    session.commit()
+    session.flush()
     if holding_id is not None:
         recompute_holding(session, holding_id)
     # 删除 deposit/withdraw 后重算现金
     if action in (TxnAction.deposit, TxnAction.withdraw) and platform_id is not None and currency is not None:
         recalc_cash(session, user, platform_id, currency)
+    session.commit()
     return {"ok": True}

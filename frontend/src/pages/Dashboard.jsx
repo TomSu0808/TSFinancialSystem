@@ -252,7 +252,7 @@ export default function Dashboard({ autoRefresh = false }) {
 
   return (
     <Space direction="vertical" size={16} style={{ display: 'flex' }}>
-      <DailyPnlDrawer open={pnlOpen} onClose={() => setPnlOpen(false)} currency={displayCurrency} masked={masked} refreshKey={summary} />
+      <DailyPnlDrawer open={pnlOpen} onClose={() => setPnlOpen(false)} masked={masked} refreshKey={summary} />
       {loginRefreshing && <Alert type="info" showIcon message="正在自动更新行情、汇率和盈亏…" />}
       {loginRefreshError && <Alert type="warning" showIcon message={loginRefreshError} action={<Button size="small" loading={refreshing} onClick={doRefresh}>重试更新</Button>} />}
       {/* 页面标题与说明 */}
@@ -311,7 +311,9 @@ export default function Dashboard({ autoRefresh = false }) {
                   {up ? <ArrowUpOutlined /> : <ArrowDownOutlined />} {sym}{fmt(Math.abs(change))}
                 </span>
                 <span style={{ color: changeColor }}>({up ? '+' : ''}{summary?.change_pct ?? 0}%)</span>
-                <span style={{ color: '#8c8c8c' }}>今日涨跌</span>
+                <Tooltip title="今日涨跌 = 当日价格变动（昨收→现价 × 数量），与「每日盈亏」的累计收益日变化口径不同。">
+                  <span style={{ color: '#8c8c8c' }}>今日涨跌 <InfoCircleOutlined style={{ fontSize: 12 }} /></span>
+                </Tooltip>
                 <Button size="small" type="text" icon={<CalendarOutlined />} onClick={() => setPnlOpen(true)}>每日盈亏</Button>
               </Space>
               <Tooltip
@@ -320,6 +322,7 @@ export default function Dashboard({ autoRefresh = false }) {
                     <div>未实现盈亏：{sym}{fmt(totalProfit)}</div>
                     <div>已实现盈亏：{sym}{fmt(realizedPnl)}</div>
                     <div>分红/利息：{sym}{fmt(realizedIncome)}</div>
+                    {summary?.returns_incomplete && <div>部分持仓缺少成本，收益仅含可计算部分；请补齐原校准记录。</div>}
                   </div>
                 )}
               >
@@ -327,7 +330,7 @@ export default function Dashboard({ autoRefresh = false }) {
                   <span style={{ color: returnColor, fontSize: 16 }}>
                     {returnUp ? '+' : ''}{sym}{fmt(totalReturn)}
                   </span>
-                  <span style={{ color: '#8c8c8c' }}>总收益</span>
+                  <span style={{ color: '#8c8c8c' }}>{summary?.returns_incomplete ? '总收益（成本待补充）' : '总收益'}</span>
                 </Space>
               </Tooltip>
             </Space>

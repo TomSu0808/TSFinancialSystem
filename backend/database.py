@@ -85,6 +85,7 @@ def _migrate_add_user_id() -> None:
             "source": "VARCHAR DEFAULT 'manual'",
             "status": "VARCHAR DEFAULT 'open'",
             "realized_pnl": "FLOAT DEFAULT 0",
+            "realized_pnl_incomplete": "BOOLEAN DEFAULT FALSE",
             "realized_income": "FLOAT DEFAULT 0",
             "cost_value": "FLOAT",
         },
@@ -98,6 +99,7 @@ def _migrate_add_user_id() -> None:
             "tags": "VARCHAR",
         },
         "snapshot": {"user_id": "INTEGER", "day": "VARCHAR"},
+        "dailypnl": {"details_json": "TEXT DEFAULT '[]'"},
         "automationrun": {"user_id": "INTEGER"},
         "transaction": {"holding_id": "INTEGER"},
         "importsession": {
@@ -172,6 +174,10 @@ def init_db() -> None:
     import models  # noqa: F401
 
     SQLModel.metadata.create_all(engine)
+    if not IS_SQLITE:
+        # PostgreSQL 原生枚举不会由 create_all 自动扩展。
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TYPE txnaction ADD VALUE IF NOT EXISTS 'adjust'"))
     _migrate_add_user_id()  # 兼容 SQLite 和 PostgreSQL
 
 

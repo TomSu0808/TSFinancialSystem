@@ -121,6 +121,7 @@ class GenericImporter(BaseImporter):
             action_map = {
                 "买入": "buy", "买": "buy", "buy": "buy",
                 "卖出": "sell", "卖": "sell", "sell": "sell",
+                "持仓校准": "adjust", "校准": "adjust", "adjust": "adjust",
                 "分红": "dividend", "股息": "dividend", "dividend": "dividend",
                 "入金": "deposit", "存入": "deposit", "deposit": "deposit",
                 "出金": "withdraw", "取出": "withdraw", "withdraw": "withdraw",

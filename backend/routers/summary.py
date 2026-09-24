@@ -168,6 +168,7 @@ def get_summary(
         "realized_pnl": round(realized_pnl, 2),
         "realized_income": round(realized_income, 2),
         "total_return": round(total_return, 2),
+        "returns_incomplete": any(h.realized_pnl_incomplete or (h.status == HoldingStatus.open and h.asset_type != "cash" and cost_basis(h) is None) for h in holdings),
     }
 
     # ── data_freshness ────────────────────────────────────────────────────────
@@ -210,6 +211,7 @@ def get_summary(
         "by_type": by_type,
         "top_movers": top_movers,
         "return_breakdown": return_breakdown,
+        "returns_incomplete": return_breakdown["returns_incomplete"],
         "data_freshness": data_freshness,
     }
 

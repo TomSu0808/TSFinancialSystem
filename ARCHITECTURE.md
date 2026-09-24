@@ -106,11 +106,16 @@ FinancialSystem/
 
 | 函数 | 职责 |
 |---|---|
-| `replay_transactions(txns)` | 纯函数：按 (date, id) 升序重放流水，返回 `PositionState`（quantity / avg_cost / realized_pnl / realized_income）；无副作用，便于单测 |
+| `replay_transactions(txns)` | 纯函数：按 (date, id) 升序重放流水，返回 `PositionState`（quantity / avg_cost / realized_pnl / realized_income / realized_pnl_incomplete）；无副作用，便于单测 |
 | `recompute_holding(session, holding_id)` | 带 DB 副作用：从 DB 读流水 → replay → 回写持仓（quantity/cost_price/realized_pnl/realized_income/status）|
 | `resolve_derived_holding(session, user, platform_id, symbol, currency, ...)` | 按 (user, platform, symbol, currency) 查 derived 持仓；`create_if_missing=True` 时自动新建 |
+| `resolve_position(session, user, txn)` | 按 (user, platform, symbol, currency) 匹配唯一持仓；同标的重复持仓报错，不猜测合并 |
+| `prepare_position(session, user, txn)` | 交易入库前，命中手填持仓时保存期初 `adjust` 记录并转 `derived` |
+| `opening_transaction(holding, date)` | 把手填数量/成本固化为一条 `adjust` 期初记录（无现金流）|
 
 **持仓状态**：买入可自动建仓（`create_if_missing`）；卖出/分红只绑定已存在的 derived 持仓；清仓（quantity ≈ 0）自动置 `status=closed`，默认在持仓列表隐藏。
+
+**持仓校准（`adjust` 流水，2026-09-24）**：`adjust` 的 `quantity` 表示校准后的**绝对数量**、`price` 为平均成本（可空），不产生现金流、不计已实现收益。手填持仓（`source=manual`）首次买卖时，`prepare_position` 自动先写入一条交易前的期初 `adjust` 记录并把该持仓转为 `derived`，从而支持「无买入流水也能卖出」。校准当天重放重设数量与成本基准，不把差额当作收益；成本未知（`price=None`）的卖出置 `realized_pnl_incomplete=True`，补齐原校准成本后重算。同一平台、代码、币种存在多个持仓时拒绝操作，要求先整理重复持仓。
 
 **绑定时机**：每次创建/修改/删除交易时，`_sync_txn_holding()` 自动判断新旧 holding_id、触发受影响持仓的重算。
 
@@ -133,7 +138,7 @@ FinancialSystem/
 | DELETE | /api/holdings/{id} | 删持仓（derived 持仓需先删流水）|
 | POST | /api/holdings/refresh-prices | ★刷新全部行情，写回价格并存 Snapshot |
 | GET | /api/transactions | 列出（`platform_id` 过滤，按日期倒序）|
-| POST | /api/transactions | 新建流水；buy 自动建/绑 derived 持仓并重算 |
+| POST | /api/transactions | 新建流水/校准；buy 自动建/绑 derived 持仓，adjust 重设绝对数量与平均成本，均触发重算 |
 | PUT | /api/transactions/{id} | 改流水；旧/新 derived 持仓均重算 |
 | DELETE | /api/transactions/{id} | 删流水；相关 derived 持仓重算 |
 | GET | /api/fx/rate | 当前汇率 |
@@ -158,9 +163,10 @@ FinancialSystem/
 1. **手填资产**：`PlatformDetail.jsx` → `POST /api/holdings` → 落 `Holding`(source=manual)。
 2. **买入驱动建仓**：`Transactions.jsx` → `POST /api/transactions`(action=buy) → `_sync_txn_holding` → `resolve_derived_holding(create_if_missing=True)` 建/找 derived 持仓 → `recompute_holding` 重算数量与成本。
 3. **卖出结转盈亏**：同上，sell → replay 计算已实现盈亏，回写 `realized_pnl`，数量归零时置 `status=closed`。
-4. **刷新行情**：Dashboard 点「更新行情」→ `POST /api/holdings/refresh-prices` → `price_provider` 按 market/symbol 抓价 → 写回 `current_price`/`prev_close`。
-5. **看总览**：`GET /api/summary?currency=CNY|USD` → 后端用 `market_value`/`day_change`/`cost_basis` 累加 + 已实现盈亏 + `FxRate` 换算 → 顺带 upsert 每日快照。
-6. **币种切换**：前端只换 `currency` 参数重拉 summary，金额由后端换算。
+4. **持仓校准 / 无买入卖出**：手填持仓直接记卖出或「持仓校准」→ `prepare_position` 写期初 `adjust` 记录并转 `derived` → `replay_transactions` 按 (date,id) 重放，扣减数量、重设成本基准；成本未知卖出标 `realized_pnl_incomplete`。
+5. **刷新行情**：Dashboard 点「更新行情」→ `POST /api/holdings/refresh-prices` → `price_provider` 按 market/symbol 抓价 → 写回 `current_price`/`prev_close`。
+6. **看总览**：`GET /api/summary?currency=CNY|USD` → 后端用 `market_value`/`day_change`/`cost_basis` 累加 + 已实现盈亏 + `FxRate` 换算 → 顺带 upsert 每日快照。
+7. **币种切换**：前端只换 `currency` 参数重拉 summary，金额由后端换算。
 
 ---
 
@@ -168,7 +174,7 @@ FinancialSystem/
 
 - **加一种资产类型/市场** → 改 `models.py` 枚举 + `price_provider.py` 抓价分支 + 前端 `constants.js` 文案。
 - **改市值/涨亏算法** → 只动 `models.py` 的 `market_value`/`day_change`，前后端都复用，勿在别处重算。
-- **改持仓派生逻辑** → 只动 `position.py` 的 `replay_transactions`，测试在 `tests/test_position.py`。
+- **改持仓派生逻辑** → 只动 `position.py` 的 `replay_transactions`（注意 `adjust` 校准流水的回放顺序、绝对数量语义与成本缺失标志 `realized_pnl_incomplete`），测试在 `tests/test_position.py` 与 `tests/test_holding_calibration.py`。
 - **加接口** → 在对应 `routers/*.py` 加路由，并在前端 `api/index.js` 同步加函数。
 - **改数据库结构** → 改 `models.py` 后在 `database.py` 的 `init_db` 里加 `addColumn`（SQLite 不支持自动迁移）；开发期也可删 `backend/data.db` 重建。
 - **上云**：SQLite→PostgreSQL 改 `DATABASE_URL` 环境变量；APScheduler 定时刷新；券商 API 直连（见 README Roadmap）。

@@ -86,3 +86,6 @@ if FRONTEND_DIST.is_dir():
         if full_path and candidate.is_file():
             return FileResponse(candidate)
         return FileResponse(FRONTEND_DIST / "index.html")
+
+    
+    

@@ -42,6 +42,9 @@ export default function PlatformDetail() {
   const [editing, setEditing] = useState(null)
   const [mode, setMode] = useState('derived')
   const [form] = Form.useForm()
+  const [calibrating, setCalibrating] = useState(null)
+  const [calibrationForm] = Form.useForm()
+  const [calibrationSaving, setCalibrationSaving] = useState(false)
 
   // Research brief drawer
   const [briefOpen, setBriefOpen] = useState(false)
@@ -144,6 +147,35 @@ export default function PlatformDetail() {
     }
   }
 
+  const openCalibration = (holding) => {
+    calibrationForm.resetFields()
+    calibrationForm.setFieldsValue({
+      date: dayjs(), quantity: holding.quantity,
+      price: holding.cost_value != null && holding.quantity > 0
+        ? holding.cost_value / holding.quantity : holding.cost_price,
+    })
+    setCalibrating(holding)
+  }
+
+  const saveCalibration = async () => {
+    try {
+      const values = await calibrationForm.validateFields()
+      setCalibrationSaving(true)
+      await createTransaction({
+        platform_id: platformId, symbol: calibrating.symbol, name: calibrating.name,
+        currency: calibrating.currency, action: 'adjust', quantity: values.quantity,
+        price: values.price ?? null, date: values.date.format('YYYY-MM-DD'), note: values.note,
+      })
+      message.success('已校准持仓，后续买卖将自动更新数量')
+      setCalibrating(null)
+      load()
+    } catch (e) {
+      if (!e.errorFields) message.error('校准失败：' + (e.response?.data?.detail || e.message))
+    } finally {
+      setCalibrationSaving(false)
+    }
+  }
+
   const openResearchBrief = async (holding) => {
     setBriefHolding(holding)
     setBriefData(null)
@@ -166,7 +198,7 @@ export default function PlatformDetail() {
           <Space size={4}>
             <span>{t || '（未命名）'}</span>
             {isDerived(r) && (
-              <Tooltip title="由交易流水计算：数量/成本只读，请到「交易记录」增删流水">
+              <Tooltip title="由交易与持仓校准记录计算；漏记买入时可使用「校准持仓」">
                 <Tag color="blue" icon={<LinkOutlined />} style={{ marginInlineStart: 0 }}>流水</Tag>
               </Tooltip>
             )}
@@ -237,6 +269,7 @@ export default function PlatformDetail() {
     {
       title: '已实现', align: 'right',
       render: (_, r) => {
+        if (r.realized_pnl_incomplete) return <Tooltip title="历史卖出缺少成本；请在交易记录中补齐原持仓校准的平均成本"><Tag color="warning">待补充成本</Tag></Tooltip>
         const realized = (r.realized_pnl || 0) + (r.realized_income || 0)
         if (!isDerived(r) || realized === 0) return '—'
         const up = realized >= 0
@@ -253,10 +286,13 @@ export default function PlatformDetail() {
       },
     },
     {
-      title: '操作', width: 180,
+      title: '操作', width: 250,
       render: (_, r) => (
         <Space>
           <a onClick={() => openEdit(r)}>编辑</a>
+          {r.symbol && r.manual_value == null && r.asset_type !== 'cash' && (
+            <a onClick={() => openCalibration(r)}>校准持仓</a>
+          )}
           {isDerived(r) ? (
             <Tooltip title="该持仓由交易流水驱动，请在「交易记录」删除其流水">
               <span style={{ color: '#ccc', cursor: 'not-allowed' }}>删除</span>
@@ -297,6 +333,27 @@ export default function PlatformDetail() {
     >
       <Table rowKey="id" loading={loading} dataSource={data} columns={columns} pagination={false} scroll={{ x: 860 }}
         rowClassName={(r) => (isClosed(r) ? 'row-closed' : '')} />
+
+      <Modal title={`校准持仓 · ${calibrating?.name || calibrating?.symbol || ''}`}
+        open={!!calibrating} onOk={saveCalibration} confirmLoading={calibrationSaving}
+        onCancel={() => setCalibrating(null)} destroyOnHidden>
+        <Typography.Paragraph type="secondary">
+          无需补录每笔买入。请填写券商显示的持仓总数量及平均成本；校准本身不产生现金收支或卖出收益。
+          如接下来要记录卖出，请填卖出前数量。同一天的记录按录入顺序生效。
+        </Typography.Paragraph>
+        <Form form={calibrationForm} layout="vertical">
+          <Form.Item name="date" label="校准日期" rules={[{ required: true, message: '请选择日期' }]}>
+            <DatePicker style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="quantity" label="校准后的总数量" rules={[{ required: true, message: '请填写总数量' }]}>
+            <InputNumber min={0} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="price" label="平均成本（可选）" extra="漏记买入后请同步核对平均成本；留空则相关盈亏待补充，不能按 0 成本计算。">
+            <InputNumber min={0} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="note" label="备注"><Input placeholder="如：按券商持仓校准，补记漏录买入" /></Form.Item>
+        </Form>
+      </Modal>
 
       {/* Research Brief Drawer */}
       <Drawer
@@ -479,7 +536,7 @@ export default function PlatformDetail() {
           )}
           {editing?.source === 'derived' && (
             <div style={{ color: '#888', fontSize: 12, marginTop: -8 }}>
-              数量与成本由交易流水自动计算，如需调整请到「交易记录」增删对应流水。
+              数量与成本由交易和校准记录计算。漏记买入时可使用列表中的「校准持仓」。
             </div>
           )}
         </Form>

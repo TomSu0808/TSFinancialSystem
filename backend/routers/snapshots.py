@@ -1,5 +1,6 @@
 """净值快照查询：供总资产走势图（按用户隔离）。"""
 import calendar
+import json
 from datetime import date, datetime, timedelta
 from typing import List, Optional
 
@@ -85,4 +86,81 @@ def daily_pnl(
             r.pnl_usd if currency == Currency.USD else (round(r.pnl_usd * 7.8, 2) if r.pnl_usd is not None else None)),
             "status": r.status, "note": r.note, "updated_at": r.updated_at.isoformat() + "Z",
             "provisional": r.day == today.isoformat()} for r in rows if _valid_day(r.day)],
+    }
+
+
+def _pick_pnl(cny, usd, currency: Currency):
+    """按展示币种取当日记录时的历史金额，不用最新汇率重算。"""
+    if currency == Currency.CNY:
+        return cny
+    if currency == Currency.USD:
+        return usd
+    return round(usd * 7.8, 2) if usd is not None else None
+
+
+@router.get("/daily-pnl/{day}")
+def daily_pnl_detail(
+    day: str,
+    currency: Currency = Query(Currency.CNY),
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """按日查看逐仓位盈亏明细（只返回当前用户该日记录，避免一次加载全年明细）。"""
+    if not _valid_day(day):
+        raise HTTPException(400, "非法日期格式，应为 YYYY-MM-DD")
+    r = session.exec(select(DailyPnl).where(
+        DailyPnl.user_id == user.id, DailyPnl.day == day,
+    )).first()
+    if r is None:
+        raise HTTPException(404, "该日期无每日盈亏记录")
+
+    details = json.loads(r.details_json or "[]")
+    has_details = bool(details)
+    positions = []
+    excluded_count = 0
+    details_total = 0.0
+    for d in details:
+        pnl = _pick_pnl(d.get("pnl_cny"), d.get("pnl_usd"), currency)
+        if pnl is not None:
+            details_total += pnl
+        if d.get("excluded"):
+            excluded_count += 1
+        positions.append({
+            "holding_id": d.get("holding_id"),
+            "position_key": d.get("position_key"),
+            "platform": d.get("platform"),
+            "symbol": d.get("symbol"),
+            "name": d.get("name"),
+            "asset_type": d.get("asset_type"),
+            "currency": d.get("currency"),
+            "pnl": pnl,
+            "pnl_native": d.get("pnl_native"),
+            "status": d.get("status"),
+            "excluded": d.get("excluded", False),
+            "reason": d.get("reason"),
+            "fx_rate": d.get("fx_rate"),
+            "fx_time": d.get("fx_time"),
+        })
+    # 按盈亏绝对值降序，无值（待确认）排最后。
+    positions.sort(key=lambda x: (x["pnl"] is None, -abs(x["pnl"] or 0.0)))
+
+    total = _pick_pnl(r.pnl_cny, r.pnl_usd, currency)
+    rounding_diff = (round(details_total - total, 2)
+                     if (total is not None and has_details) else 0.0)
+
+    return {
+        "timezone": "UTC",
+        "day": r.day,
+        "currency": currency.value,
+        "total": total,
+        "status": r.status,
+        "note": r.note,
+        "updated_at": r.updated_at.isoformat() + "Z",
+        "has_details": has_details,
+        "no_detail_message": None if has_details else "该日期未记录持仓明细（历史仅有汇总，无法反推逐仓位明细）",
+        "coverage_complete": r.coverage_complete,
+        "excluded_count": excluded_count,
+        "positions": positions,
+        "details_total": round(details_total, 2),
+        "rounding_diff": rounding_diff,
     }

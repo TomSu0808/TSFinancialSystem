@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Drawer, Empty, Grid, List, Segmented, Space, Table, Tag, Tooltip, Typography } from 'antd'
-import { LeftOutlined, RightOutlined } from '@ant-design/icons'
-import { getDailyPnl } from '../api'
-import { CURRENCY_SYMBOL, fmt } from '../constants'
+import { ArrowLeftOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons'
+import { getDailyPnl, getDailyPnlDetail } from '../api'
+import { CURRENCY_SYMBOL, ASSET_TYPE_LABEL, fmt } from '../constants'
 import { useColorScheme } from '../colorScheme.jsx'
+import { useDisplaySettings } from '../displaySettings.jsx'
 
 const labels = { recorded: '已记录', baseline: '建立基准', missing: '数据不足', stale: '待更新', adjusted: '口径变更' }
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
@@ -27,13 +28,19 @@ function compact(v) {
   return (v > 0 ? '+' : v < 0 ? '-' : '') + s
 }
 
-export default function DailyPnlDrawer({ open, onClose, currency, masked, refreshKey }) {
+export default function DailyPnlDrawer({ open, onClose, masked, refreshKey }) {
+  const { displayCurrency, setDisplayCurrency } = useDisplaySettings()
   const [view, setView] = useState('calendar')
   const [month, setMonth] = useState(() => { const t = new Date(); return { y: t.getUTCFullYear(), m: t.getUTCMonth() } })
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
   const [revision, setRevision] = useState(0)
+  const [selectedDay, setSelectedDay] = useState(null)
+  const [detail, setDetail] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState(null)
+  const [detailRevision, setDetailRevision] = useState(0)
   const { upColor, downColor } = useColorScheme()
   const screens = Grid.useBreakpoint()
 
@@ -46,14 +53,33 @@ export default function DailyPnlDrawer({ open, onClose, currency, masked, refres
     let active = true
     setLoading(true)
     setError(null)
-    getDailyPnl({ days: 366, currency }).then((value) => {
+    getDailyPnl({ days: 366, currency: displayCurrency }).then((value) => {
       if (active) setData(value)
     }).catch(() => { if (active) setError('每日盈亏加载失败，请重试') })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [open, currency, revision, refreshKey])
+  }, [open, displayCurrency, revision, refreshKey])
 
-  const money = (v) => masked ? '****' : `${v > 0 ? '+' : ''}${CURRENCY_SYMBOL[currency]}${fmt(v)}`
+  useEffect(() => {
+    if (!open || view !== 'detail' || !selectedDay) return
+    let active = true
+    setDetailLoading(true)
+    setDetailError(null)
+    setDetail(null)
+    getDailyPnlDetail(selectedDay, { currency: displayCurrency }).then((value) => {
+      if (active) setDetail(value)
+    }).catch(() => { if (active) setDetailError('明细加载失败，请重试') })
+      .finally(() => { if (active) setDetailLoading(false) })
+    return () => { active = false }
+  }, [open, view, selectedDay, displayCurrency, detailRevision])
+
+  const money = (v) => masked ? '****' : `${v > 0 ? '+' : ''}${CURRENCY_SYMBOL[displayCurrency]}${fmt(v)}`
+  const moneyOrPending = (v) => (v == null ? '待确认' : money(v))
+
+  const openDetail = (day) => {
+    setSelectedDay(day)
+    setView('detail')
+  }
 
   const byDay = useMemo(() => {
     const m = {}
@@ -131,14 +157,19 @@ export default function DailyPnlDrawer({ open, onClose, currency, masked, refres
           const pnl = cell.item?.pnl ?? null
           const color = pnl == null ? undefined : masked ? undefined : pnl > 0 ? upColor : pnl < 0 ? downColor : '#8c8c8c'
           const isToday = cell.key === todayStr
+          const clickable = !!cell.item
           return (
             <Tooltip key={i} title={cellTooltip(cell)} mouseEnterDelay={0.05}>
-              <div style={{
-                minHeight: 54, borderRadius: 8, padding: '4px 6px', cursor: 'default',
-                background: isToday ? 'rgba(22,119,255,0.06)' : cell.weekend ? 'rgba(0,0,0,0.02)' : 'transparent',
-                border: isToday ? '1px solid #1677ff' : '1px solid transparent',
-                boxSizing: 'border-box',
-              }}>
+              <div
+                onClick={clickable ? () => openDetail(cell.key) : undefined}
+                style={{
+                  minHeight: 54, borderRadius: 8, padding: '4px 6px',
+                  cursor: clickable ? 'pointer' : 'default',
+                  background: isToday ? 'rgba(22,119,255,0.06)' : cell.weekend ? 'rgba(0,0,0,0.02)' : 'transparent',
+                  border: isToday ? '1px solid #1677ff' : '1px solid transparent',
+                  boxSizing: 'border-box',
+                }}
+              >
                 <div style={{ fontSize: 11, lineHeight: '16px', color: cell.weekend ? '#bfbfbf' : '#8c8c8c' }}>{cell.dayNum}</div>
                 {pnl != null && (
                   <div style={{ fontSize: 12, fontWeight: 600, lineHeight: '22px', color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -151,7 +182,7 @@ export default function DailyPnlDrawer({ open, onClose, currency, masked, refres
         })}
       </div>
       <div style={{ marginTop: 10, fontSize: 12, color: '#8c8c8c' }}>
-        红涨绿跌 · 悬停看明细 · 灰字为零或无变化
+        红涨绿跌 · 点击日期看逐仓位明细 · 灰字为零或无变化
       </div>
     </div>
   )
@@ -170,7 +201,10 @@ export default function DailyPnlDrawer({ open, onClose, currency, masked, refres
           </div>
           <div style={{ margin: '8px 0' }}><Tag>{labels[row.status] || row.status}</Tag>{row.provisional && <Tag>今日暂计</Tag>}</div>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>{row.note}</Typography.Text>
-          <div><Typography.Text type="secondary" style={{ fontSize: 12 }}>更新于 {new Date(row.updated_at).toLocaleString('zh-CN')}</Typography.Text></div>
+          <div style={{ marginTop: 6 }}>
+            <Button size="small" type="link" style={{ padding: 0 }} onClick={() => openDetail(row.day)}>查看明细</Button>
+            <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>更新于 {new Date(row.updated_at).toLocaleString('zh-CN')}</Typography.Text>
+          </div>
         </List.Item>
       )}
     />
@@ -180,29 +214,103 @@ export default function DailyPnlDrawer({ open, onClose, currency, masked, refres
       locale={{ emptyText: <Empty description="尚无每日盈亏记录；自动刷新后开始建立基准，历史不会补零。" /> }}
       columns={[
         { title: '日期（UTC）', dataIndex: 'day', render: (day, row) => <span>{day}{row.provisional && <Tag style={{ marginLeft: 6 }}>今日暂计</Tag>}</span> },
-        { title: `盈亏（${currency}）`, dataIndex: 'pnl', align: 'right', render: (v) => v == null ? <Typography.Text type="secondary">待确认</Typography.Text> : <span style={{ fontWeight: 600, color: masked ? undefined : v > 0 ? upColor : v < 0 ? downColor : undefined }}>{money(v)}</span> },
+        { title: `盈亏（${displayCurrency}）`, dataIndex: 'pnl', align: 'right', render: (v) => v == null ? <Typography.Text type="secondary">待确认</Typography.Text> : <span style={{ fontWeight: 600, color: masked ? undefined : v > 0 ? upColor : v < 0 ? downColor : undefined }}>{money(v)}</span> },
         { title: '状态', dataIndex: 'status', render: (value, row) => <Tag title={row.note}>{labels[value] || value}</Tag> },
+        { title: '', dataIndex: 'day', align: 'right', render: (day) => <Button size="small" type="link" onClick={() => openDetail(day)}>查看明细</Button> },
       ]}
       expandable={{ expandedRowRender: (row) => <Typography.Text type="secondary">{row.note}<br />更新于 {new Date(row.updated_at).toLocaleString('zh-CN')}</Typography.Text> }}
     />
   )
 
+  const detailView = (
+    <div>
+      <Space direction="vertical" size={12} style={{ display: 'flex' }}>
+        <Space size={4}>
+          <Button size="small" type="text" icon={<ArrowLeftOutlined />} onClick={() => setView(screens.sm ? 'calendar' : 'list')}>返回</Button>
+          <Typography.Text strong>{selectedDay}</Typography.Text>
+          <Typography.Text type="secondary">UTC</Typography.Text>
+        </Space>
+        {detailError ? (
+          <Alert type="error" showIcon message={detailError} action={<Button size="small" onClick={() => setDetailRevision((v) => v + 1)}>重试</Button>} />
+        ) : detailLoading || !detail ? (
+          <Empty description="正在加载明细…" />
+        ) : (
+          <>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
+              <Space size={8} wrap>
+                <Tag>{labels[detail.status] || detail.status}</Tag>
+                {detail.excluded_count > 0 && <Tag color="orange">部分持仓缺价/成本</Tag>}
+                {detail.rounding_diff !== 0 && <Tag color="default">有舍入差</Tag>}
+              </Space>
+              <Typography.Text strong style={{ fontSize: 16, color: detail.total == null ? undefined : masked ? undefined : detail.total > 0 ? upColor : detail.total < 0 ? downColor : undefined }}>
+                当日总盈亏 {moneyOrPending(detail.total)}
+              </Typography.Text>
+            </div>
+            {detail.note && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{detail.note}</Typography.Text>}
+            {!detail.has_details ? (
+              <Empty description={detail.no_detail_message} />
+            ) : detail.positions.length === 0 ? (
+              <Empty description="该日无持仓明细" />
+            ) : (
+              <List
+                dataSource={detail.positions}
+                renderItem={(p) => {
+                  const color = p.pnl == null ? undefined : masked ? undefined : p.pnl > 0 ? upColor : p.pnl < 0 ? downColor : undefined
+                  return (
+                    <List.Item style={{ display: 'block', padding: '12px 0' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                        <Space size={6} wrap>
+                          <Tag style={{ fontSize: 11, padding: '0 4px' }}>{p.platform}</Tag>
+                          <span>{p.name || p.symbol || '—'}</span>
+                          {p.symbol && p.name && <span style={{ color: '#aaa', fontSize: 12 }}>{p.symbol}</span>}
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{ASSET_TYPE_LABEL[p.asset_type] || p.asset_type}</Typography.Text>
+                        </Space>
+                        <strong style={{ color }}>{moneyOrPending(p.pnl)}</strong>
+                      </div>
+                      {p.pnl_native != null && p.currency !== displayCurrency && (
+                        <div style={{ fontSize: 12, color: '#8c8c8c', marginTop: 4 }}>
+                          原币 {masked ? '****' : `${CURRENCY_SYMBOL[p.currency]}${fmt(p.pnl_native)}`}（{p.currency}）
+                        </div>
+                      )}
+                      {p.reason && <div style={{ fontSize: 12, color: '#bfbfbf', marginTop: 2 }}>{p.reason}</div>}
+                    </List.Item>
+                  )
+                }}
+              />
+            )}
+          </>
+        )}
+      </Space>
+    </div>
+  )
+
   return (
     <Drawer title="每日盈亏" open={open} onClose={onClose} width="min(720px, 100vw)">
       <Space direction="vertical" size={16} style={{ display: 'flex' }}>
-        <div>
-          <Typography.Title level={4} style={{ margin: '0 0 8px' }}>把每天的变化留下来</Typography.Title>
-          <Typography.Text type="secondary">后台每日自动记录，登录后再更新一次。历史金额使用记录时的汇率。</Typography.Text>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+          <div>
+            <Typography.Title level={4} style={{ margin: '0 0 8px' }}>把每天的变化留下来</Typography.Title>
+            <Typography.Text type="secondary">后台每日自动记录，登录后再更新一次。历史金额使用记录时的汇率。</Typography.Text>
+          </div>
+          <Segmented
+            value={displayCurrency}
+            onChange={setDisplayCurrency}
+            options={[{ label: '¥ 人民币', value: 'CNY' }, { label: '$ 美元', value: 'USD' }]}
+          />
         </div>
-        {screens.sm && (
-          <Segmented value={view} onChange={setView} options={[
-            { label: '日历', value: 'calendar' }, { label: '列表', value: 'list' },
-          ]} />
+        {view === 'detail' ? detailView : (
+          <>
+            {screens.sm && (
+              <Segmented value={view} onChange={setView} options={[
+                { label: '日历', value: 'calendar' }, { label: '列表', value: 'list' },
+              ]} />
+            )}
+            {error ? <Alert type="error" showIcon message={error} action={<Button onClick={() => setRevision((v) => v + 1)}>重试</Button>} />
+              : view === 'calendar' && screens.sm ? calendarView : listView}
+          </>
         )}
-        {error ? <Alert type="error" showIcon message={error} action={<Button onClick={() => setRevision((v) => v + 1)}>重试</Button>} />
-          : view === 'calendar' && screens.sm ? calendarView : listView}
         <Alert type="info" showIcon message="统计口径"
-          description={data?.method || '累计持仓收益的日变化，含已实现盈亏和分红；排除入出金和汇兑变动。首日或缺少价格、成本时不显示虚构盈亏。'} />
+          description={data?.method || '累计持仓收益的日变化，含已实现盈亏和分红；排除入出金和汇兑变动。首日或缺少价格、成本时不显示虚构盈亏。与总览「今日涨跌」（仅当日价格变动）口径不同。'} />
       </Space>
     </Drawer>
   )

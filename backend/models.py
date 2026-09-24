@@ -113,6 +113,7 @@ class Holding(SQLModel, table=True):
     source: HoldingSource = HoldingSource.manual
     status: HoldingStatus = HoldingStatus.open
     realized_pnl: float = 0.0       # 累计已实现盈亏（derived）
+    realized_pnl_incomplete: bool = False  # 存在成本未知的卖出，realized_pnl 仅含可计算部分
     realized_income: float = 0.0    # 累计分红/利息（derived）
 
 
@@ -140,6 +141,7 @@ class DailyPnl(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     returns_json: str = "{}"
     basis_json: str = "{}"
+    details_json: str = "[]"  # 逐仓位累计收益快照（含名称/平台/币种/汇率），供按日查看明细
     pnl_cny: Optional[float] = None
     pnl_usd: Optional[float] = None
     status: str = "baseline"
@@ -148,6 +150,7 @@ class DailyPnl(SQLModel, table=True):
 
 
 class TxnAction(str, Enum):
+    adjust = "adjust"    # 持仓校准：quantity 为绝对数量，price 为平均成本；无现金流
     buy = "buy"          # 买入
     sell = "sell"        # 卖出
     dividend = "dividend"  # 分红/利息
@@ -157,7 +160,7 @@ class TxnAction(str, Enum):
 
 
 class Transaction(SQLModel, table=True):
-    """交易流水（独立账本，不自动改持仓）。"""
+    """交易及持仓校准记录，买卖与校准驱动持仓重算。"""
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
     platform_id: Optional[int] = Field(default=None, foreign_key="platform.id", index=True)
