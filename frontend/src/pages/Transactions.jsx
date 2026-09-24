@@ -8,16 +8,18 @@ import { InboxOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
   listTransactions, createTransaction, updateTransaction, deleteTransaction,
-  listPlatforms, previewTransactionImport, commitTransactionImport,
+  listPlatforms, listHoldings, listCash, previewTransactionImport, commitTransactionImport,
   previewImport, commitImport, getImportReconciliation, getImportDetail,
 } from '../api'
 import {
   CURRENCIES, TXN_ACTIONS, TXN_ACTION_LABEL, CURRENCY_SYMBOL, fmt,
 } from '../constants'
+import { cashFlow, projectedBalance, holdingStatus, projectedQuantity } from '../cash'
+import { useColorScheme } from '../colorScheme.jsx'
 
 const ACTION_COLOR = {
   adjust: 'cyan',
-  buy: 'red', sell: 'green', dividend: 'gold', deposit: 'blue', withdraw: 'purple', other: 'default',
+  buy: 'red', sell: 'green', dividend: 'gold', deposit: 'blue', withdraw: 'purple', cash_adjust: 'geekblue', other: 'default',
 }
 
 const txnAmount = (t) => {
@@ -30,6 +32,9 @@ const txnAmount = (t) => {
   }
   return null
 }
+
+// 数量展示（不随隐私模式打码，只保留合适精度）
+const qtyText = (n) => (n == null ? '—' : Number(n).toLocaleString('zh-CN', { maximumFractionDigits: 4 }))
 
 const CSV_TEMPLATE = [
   'date,action,name,symbol,platform,currency,quantity,price,fee,amount,note',
@@ -47,6 +52,64 @@ export default function Transactions() {
   const selectedAction = Form.useWatch('action', form)
   const isAdjustment = selectedAction === 'adjust'
   const [filterForm] = Form.useForm()
+
+  const { upColor, downColor } = useColorScheme()
+  const [holdings, setHoldings] = useState([])
+  const [holdingsLoading, setHoldingsLoading] = useState(false)
+  const [holdingsError, setHoldingsError] = useState(false)
+  const [cashAccounts, setCashAccounts] = useState([])
+
+  const platName = useMemo(
+    () => Object.fromEntries(platforms.map((p) => [p.id, p.name])),
+    [platforms],
+  )
+
+  const isCashAdjust = selectedAction === 'cash_adjust'
+  const isTrade = selectedAction === 'buy' || selectedAction === 'sell'
+  const showsSymbol = isTrade || isAdjustment || selectedAction === 'dividend'
+  const showsName = showsSymbol || selectedAction === 'other'
+  const showsQuantity = isTrade || isAdjustment
+  const showsAmount = isTrade || ['deposit', 'withdraw', 'dividend', 'cash_adjust'].includes(selectedAction)
+  const requiresPlatform = isTrade || isAdjustment || isCashAdjust || ['deposit', 'withdraw', 'dividend'].includes(selectedAction)
+  const amountRequired = isCashAdjust || ['deposit', 'withdraw', 'dividend'].includes(selectedAction)
+
+  const wPlatformId = Form.useWatch('platform_id', form)
+  const wSymbol = Form.useWatch('symbol', form)
+  const wCurrency = Form.useWatch('currency', form)
+  const wQuantity = Form.useWatch('quantity', form)
+  const wPrice = Form.useWatch('price', form)
+  const wFee = Form.useWatch('fee', form)
+  const wAmount = Form.useWatch('amount', form)
+
+  const hs = holdingStatus(holdings, { platform_id: wPlatformId, symbol: wSymbol, currency: wCurrency })
+  const currentQty = hs.kind === 'known' ? hs.quantity : null
+  const projQty = projectedQuantity(selectedAction, currentQty, wQuantity)
+  const flow = cashFlow({ action: selectedAction, quantity: wQuantity, price: wPrice, fee: wFee, amount: wAmount })
+  const cashAcct = cashAccounts.find((c) => c.platform_id === wPlatformId && c.currency === wCurrency)
+  const cashBalance = cashAcct?.initialized ? cashAcct.balance : null
+  const projBalance = projectedBalance(cashBalance, flow)
+  const sym = CURRENCY_SYMBOL[wCurrency] || ''
+  const showCashBlock = flow != null && (
+    isTrade ? (wAmount != null || (wQuantity != null && wPrice != null))
+      : ['deposit', 'withdraw', 'dividend'].includes(selectedAction) ? wAmount != null
+        : false
+  )
+
+  const holdingOptions = useMemo(() => (
+    holdings
+      .filter((h) => h.asset_type !== 'cash' && h.symbol)
+      .map((h) => ({
+        value: h.id,
+        label: `${h.name || h.symbol} · ${h.symbol} · ${platName[h.platform_id] || '—'} · ${h.currency}｜${h.quantity == null ? '数量未知' : qtyText(h.quantity)}`,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+  ), [holdings, platName])
+
+  const onPickHolding = (id) => {
+    const h = holdings.find((x) => x.id === id)
+    if (!h) return
+    form.setFieldsValue({ platform_id: h.platform_id, symbol: h.symbol, name: h.name || '', currency: h.currency })
+  }
 
   // CSV import state (old)
   const [csvOpen, setCsvOpen] = useState(false)
@@ -68,11 +131,6 @@ export default function Transactions() {
   const [importRecon, setImportRecon] = useState(null)
   const [importFields, setImportFields] = useState({})
 
-  const platName = useMemo(
-    () => Object.fromEntries(platforms.map((p) => [p.id, p.name])),
-    [platforms],
-  )
-
   const load = async (f = {}) => {
     setLoading(true)
     const params = {}
@@ -93,7 +151,22 @@ export default function Transactions() {
     }
   }
 
-  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const loadRefs = async () => {
+    try {
+      const [hs, cash] = await Promise.all([
+        listHoldings({ include_closed: true }),
+        listCash(),
+      ])
+      setHoldings(hs)
+      setCashAccounts(cash)
+      setHoldingsError(false)
+    } catch (e) {
+      setHoldingsError(true)
+      message.error('加载持仓/现金失败：' + e.message)
+    }
+  }
+
+  useEffect(() => { load(); loadRefs() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (location.state?.openAdd) {
@@ -140,6 +213,17 @@ export default function Transactions() {
       payload.amount = null
       payload.price = payload.price ?? null
     }
+    if (['cash_adjust', 'deposit', 'withdraw'].includes(payload.action)) {
+      payload.symbol = null
+      payload.name = null
+      payload.quantity = null
+      payload.price = null
+      payload.fee = null
+    } else if (payload.action === 'dividend') {
+      payload.quantity = null
+      payload.price = null
+      payload.fee = null
+    }
     try {
       if (editing) await updateTransaction(editing.id, payload)
       else await createTransaction(payload)
@@ -147,6 +231,7 @@ export default function Transactions() {
       message.success(drives ? '已保存，相关持仓已同步' : '已保存')
       setOpen(false)
       load()
+      loadRefs()
     } catch (e) {
       message.error('保存失败：' + (e.response?.data?.detail || e.message))
     }
@@ -462,6 +547,12 @@ export default function Transactions() {
         width={560}
       >
         <Form form={form} layout="vertical">
+          {isCashAdjust && (
+            <div style={{ marginBottom: 16, color: '#444', background: '#f6ffed', padding: '8px 12px', borderRadius: 6, border: '1px solid #b7eb8f', fontSize: 13, lineHeight: 1.7 }}>
+              <b>现金校准/初始化</b>：金额填写该时点的<b>现金绝对余额</b>（不是增减量），用于建立该平台+币种现金的起始基准。
+              之后买卖/分红/出入金会在此基础上累计；同一平台+币种只需初始化一次。
+            </div>
+          )}
           {isAdjustment && <div style={{ marginBottom: 16, color: '#666' }}>
             校准数量是该时点的总持仓，并非增加数量；价格填写平均成本（可留空）。不产生现金流。
             同日按录入顺序生效；补充历史成本请编辑原校准记录。
@@ -477,31 +568,122 @@ export default function Transactions() {
               <Select options={CURRENCIES} />
             </Form.Item>
           </Space>
-          <Space style={{ display: 'flex' }}>
-            <Form.Item name="name" label="标的名称" style={{ flex: 1 }}>
-              <Input placeholder="如：Apple、贵州茅台" />
+
+          {isTrade && (
+            <Form.Item label="选择已有持仓（可选）">
+              <Select
+                showSearch
+                optionFilterProp="label"
+                placeholder={holdingsLoading ? '加载持仓中…' : holdingsError ? '持仓加载失败' : '搜索并选择持仓，自动带出账户/代码/币种'}
+                options={holdingOptions}
+                onChange={onPickHolding}
+                value={null}
+                style={{ width: '100%' }}
+                disabled={holdingsLoading || holdingsError}
+              />
             </Form.Item>
-            <Form.Item name="platform_id" label="平台" rules={isAdjustment ? [{ required: true, message: '请选择平台' }] : []} style={{ flex: 1 }}>
+          )}
+
+          <Space style={{ display: 'flex' }}>
+            {showsName && (
+              <Form.Item name="name" label="标的名称" style={{ flex: 1 }}>
+                <Input placeholder="如：Apple、贵州茅台" />
+              </Form.Item>
+            )}
+            <Form.Item name="platform_id" label="平台" rules={requiresPlatform ? [{ required: true, message: '请选择平台' }] : []} style={{ flex: 1 }}>
               <Select allowClear placeholder="可选" options={platforms.map((p) => ({ value: p.id, label: p.name }))} />
             </Form.Item>
           </Space>
-          <Form.Item name="symbol" label={isAdjustment ? '代码' : '代码（可选）'} rules={isAdjustment ? [{ required: true, message: '请填写代码' }] : []}>
-            <Input placeholder="如 AAPL、600519" />
-          </Form.Item>
-          <Space style={{ display: 'flex' }}>
-            <Form.Item name="quantity" label={isAdjustment ? '校准后的总数量' : '数量'} rules={isAdjustment ? [{ required: true, message: '请填写总数量' }] : []} style={{ flex: 1 }}>
-              <InputNumber min={0} style={{ width: '100%' }} placeholder="股数/份额" />
+
+          {showsSymbol && (
+            <Form.Item name="symbol" label={isAdjustment ? '代码' : '代码（可选）'} rules={isAdjustment ? [{ required: true, message: '请填写代码' }] : []}>
+              <Input placeholder="如 AAPL、600519" />
             </Form.Item>
-            <Form.Item name="price" label={isAdjustment ? '平均成本（可选）' : '价格'} style={{ flex: 1 }}>
-              <InputNumber min={0} style={{ width: '100%' }} placeholder={isAdjustment ? '留空则盈亏待补充' : '成交价'} />
+          )}
+
+          {isTrade && (
+            <div style={{ marginBottom: 12 }}>
+              {hs.kind === 'insufficient' && <span style={{ color: '#999', fontSize: 13 }}>选择平台与代码后显示当前持仓</span>}
+              {hs.kind === 'none' && <Tag color="default" style={{ fontSize: 13 }}>当前持仓 0 股（新标的）</Tag>}
+              {hs.kind === 'unknown' && <Tag color="orange" style={{ fontSize: 13 }}>当前持仓：数量未知</Tag>}
+              {hs.kind === 'known' && (
+                <span style={{ fontSize: 13 }}>
+                  当前持仓 <b style={{ fontSize: 16 }}>{qtyText(currentQty)}</b> 股
+                  {projQty != null && (
+                    <span style={{ color: '#888', marginLeft: 8 }}>→ 交易后 {qtyText(projQty)} 股</span>
+                  )}
+                </span>
+              )}
+            </div>
+          )}
+
+          {showsQuantity && (
+            <Space style={{ display: 'flex' }} align="start">
+              <Form.Item name="quantity" label={isAdjustment ? '校准后的总数量' : '数量'} rules={isAdjustment ? [{ required: true, message: '请填写总数量' }] : []} style={{ flex: 1 }}>
+                <InputNumber min={0} style={{ width: '100%' }} placeholder="股数/份额" />
+              </Form.Item>
+              <Form.Item name="price" label={isAdjustment ? '平均成本（可选）' : '价格'} style={{ flex: 1 }}>
+                <InputNumber min={0} style={{ width: '100%' }} placeholder={isAdjustment ? '留空则盈亏待补充' : '成交价'} />
+              </Form.Item>
+              {isTrade && (
+                <Form.Item name="fee" label="费用" style={{ flex: 1 }}>
+                  <InputNumber style={{ width: '100%' }} placeholder="手续费" />
+                </Form.Item>
+              )}
+              {isTrade && selectedAction === 'sell' && currentQty != null && currentQty > 0 && (
+                <Form.Item label=" " style={{ width: 88 }}>
+                  <Button size="small" onClick={() => form.setFieldsValue({ quantity: currentQty })}>全部卖出</Button>
+                </Form.Item>
+              )}
+            </Space>
+          )}
+
+          {showsAmount && (
+            <Form.Item
+              name="amount"
+              label={isCashAdjust ? '现金余额（绝对余额）' : ['deposit', 'withdraw', 'dividend'].includes(selectedAction) ? '金额' : '金额（可选，留空按 量×价±费 估算）'}
+              rules={amountRequired ? [{ required: true, message: '请填写金额' }] : []}
+            >
+              <InputNumber min={0} style={{ width: '100%' }} placeholder={
+                isCashAdjust ? '该时点现金余额'
+                  : selectedAction === 'deposit' ? '入金金额'
+                    : selectedAction === 'withdraw' ? '出金金额'
+                      : selectedAction === 'dividend' ? '分红/利息金额'
+                        : '留空则按 量×价±费 自动估算'
+              } />
             </Form.Item>
-            <Form.Item name="fee" label="费用" hidden={isAdjustment} style={{ flex: 1 }}>
-              <InputNumber style={{ width: '100%' }} placeholder="手续费" />
-            </Form.Item>
-          </Space>
-          <Form.Item name="amount" label="金额（可选，留空按 量×价±费 估算）" hidden={isAdjustment}>
-            <InputNumber style={{ width: '100%' }} placeholder="入金/出金/分红可直接填金额" />
-          </Form.Item>
+          )}
+
+          {showCashBlock && (
+            <div style={{ background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 6, padding: '8px 12px', marginBottom: 12 }}>
+              <div>
+                本次现金：
+                <b style={{ color: flow > 0 ? upColor : flow < 0 ? downColor : '#333', fontSize: 15 }}>
+                  {flow > 0 ? '+' : ''}{fmt(flow)} {sym}
+                </b>
+              </div>
+              {cashAcct ? (
+                cashBalance != null ? (
+                  <div style={{ marginTop: 4, color: '#555' }}>
+                    预计交易后余额：
+                    <b>{fmt(projBalance)} {sym}</b>
+                    {projBalance != null && projBalance < 0 && (
+                      <Tag color="red" style={{ marginLeft: 8 }}>将为负</Tag>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 4, color: '#fa8c16', fontSize: 12 }}>
+                    该账户现金尚未初始化，预计余额不可用（请先在账户详情记录一笔「现金校准/初始化」）
+                  </div>
+                )
+              ) : (
+                <div style={{ marginTop: 4, color: '#999', fontSize: 12 }}>
+                  未匹配到该平台+币种的现金账户（本笔现金变动仍会正确记账）
+                </div>
+              )}
+            </div>
+          )}
+
           <Form.Item name="note" label="备注">
             <Input placeholder="可选" />
           </Form.Item>

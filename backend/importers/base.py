@@ -77,7 +77,7 @@ class BaseImporter:
 
     broker_type: str = "generic"
 
-    SUPPORTED_ACTIONS = {"buy", "sell", "adjust", "dividend", "deposit", "withdraw", "other"}
+    SUPPORTED_ACTIONS = {"buy", "sell", "adjust", "dividend", "deposit", "withdraw", "cash_adjust", "other"}
     SUPPORTED_CURRENCIES = {"CNY", "USD", "HKD"}
 
     def parse(self, data: bytes, file_name: str = "") -> List[ImportedTransactionDraft]:

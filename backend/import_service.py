@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException
 from sqlmodel import Session, select
 
-from cash_service import recalc_cash
+from cash_service import CASH_ACTIONS, check_cash, recalc_cash
 from importers import BROKER_IMPORTERS, BaseImporter, ImportedTransactionDraft
 from models import (
     Currency,
@@ -377,6 +377,7 @@ def commit_import(
         from position import prepare_position
         try:
             _check_oversell(session, user, txn)
+            check_cash(session, user, txn)
             prepare_position(session, user, txn)
         except HTTPException as e:
             session.rollback()
@@ -394,8 +395,8 @@ def commit_import(
             session.rollback()
             continue
 
-        # 收集现金重算维度
-        if action in (TxnAction.deposit, TxnAction.withdraw) and pid is not None and currency is not None:
+        # 收集现金重算维度（buy/sell/dividend/cash_adjust/deposit/withdraw 均影响现金）
+        if action in CASH_ACTIONS and pid is not None and currency is not None:
             cash_recalc_keys.add((pid, currency))
 
         session.commit()

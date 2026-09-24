@@ -156,6 +156,7 @@ class TxnAction(str, Enum):
     dividend = "dividend"  # 分红/利息
     deposit = "deposit"  # 入金
     withdraw = "withdraw"  # 出金
+    cash_adjust = "cash_adjust"  # 现金校准/初始化：amount 为该时点绝对余额；无现金流
     other = "other"      # 其它
 
 

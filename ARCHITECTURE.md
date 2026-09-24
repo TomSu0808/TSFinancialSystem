@@ -31,6 +31,7 @@ FinancialSystem/
 │  ├─ database.py                 SQLite 引擎 / init_db（自动迁移补列）/ get_session
 │  ├─ models.py                   ★核心：表模型 + API schema + 市值/涨亏/盈亏计算口径
 │  ├─ position.py                 ★交易驱动核心：replay_transactions / recompute_holding / resolve_derived_holding
+│  ├─ cash_service.py             ★现金账本核心：replay_cash / recalc_cash / check_cash（按平台+币种重放现金）
 │  ├─ price_provider.py           行情抓取（akshare / CoinGecko）
 │  ├─ fx_provider.py              汇率抓取（open.er-api.com，回退中行）
 │  ├─ auth.py                     JWT token 签发/校验，get_current_user 依赖项
@@ -43,6 +44,7 @@ FinancialSystem/
 │     ├─ platforms.py             /api/platforms   平台 CRUD
 │     ├─ holdings.py              /api/holdings    持仓 CRUD + 刷新行情；derived 持仓只读保护
 │     ├─ transactions.py          /api/transactions  流水 CRUD；买/卖/分红自动绑定并重算 derived 持仓
+│     ├─ cash.py                  /api/cash  现金账户汇总（按平台+币种）+ 现金流水
 │     ├─ summary.py               /api/summary     总资产/涨跌/未实现盈亏/已实现盈亏/总收益；每日快照 upsert
 │     ├─ fx.py                    /api/fx          汇率查询/刷新
 │     ├─ snapshots.py             /api/snapshots   历史净值曲线数据
@@ -52,6 +54,7 @@ FinancialSystem/
 ├─ backend/tests/                 Pytest 测试
 │  ├─ conftest.py                 内存 DB + 覆盖 get_session/get_current_user 夹具
 │  ├─ test_position.py            replay_transactions 纯逻辑单测
+│  ├─ test_cash.py                现金账本：初始化/买卖/手填金额/账户币种隔离/编辑删除重算/负余额时间线拒绝
 │  └─ test_transactions_drive_holdings.py  通过 API 端到端验证交易驱动持仓
 │
 └─ frontend/                      React 前端
@@ -63,12 +66,13 @@ FinancialSystem/
       ├─ api/index.js             ★前端唯一 API 层（axios + JWT 拦截器，全部接口在此）
       ├─ constants.js             枚举/常量/隐私打码 fmt
       ├─ holdings.js              derived/manual 持仓展示辅助函数（复用于多个页面）
+      ├─ cash.js                  ★现金账本纯函数（与 backend/cash_service.py 同语义，避免重复计费）
       └─ pages/
          ├─ Login.jsx             登录 / 注册
          ├─ Dashboard.jsx         总览：总资产、今日涨跌、总收益（悬浮拆分）、走势折线图、配置饼图
          ├─ Platforms.jsx         平台列表 + 展开行（持仓、市值、占比）
-         ├─ PlatformDetail.jsx    某平台下的持仓管理（新建/编辑/删除，derived 只读）
-         ├─ Transactions.jsx      交易流水账本（买/卖/分红/入金/出金/其它；保存后自动同步持仓）
+         ├─ PlatformDetail.jsx    某平台下的持仓管理（新建/编辑/删除，derived 只读；含现金账户区）
+         ├─ Transactions.jsx      交易流水账本（买/卖/分红/入金/出金/现金校准；保存后自动同步持仓与现金）
          └─ Notes.jsx             投资心得备忘
 ```
 
@@ -83,12 +87,12 @@ FinancialSystem/
 | `User` | 登录账号 | id, username, email, password_hash, created_at |
 | `Platform` | 资产所在平台 | id, user_id(FK), name, note |
 | `Holding` | 一条持仓 | platform_id(FK), user_id(FK), currency, asset_type, market, symbol, name, quantity, manual_value, cost_price, current_price, prev_close, price_updated_at; `source`(manual/derived), `status`(open/closed), `realized_pnl`, `realized_income` |
-| `Transaction` | 交易流水 | user_id(FK), platform_id(FK), `holding_id`(FK→Holding，系统自动绑定), date, action(buy/sell/dividend/deposit/withdraw/other), name, symbol, currency, quantity, price, fee, amount, note |
+| `Transaction` | 交易流水 | user_id(FK), platform_id(FK), `holding_id`(FK→Holding，系统自动绑定), date, action(buy/sell/adjust/dividend/deposit/withdraw/cash_adjust/other), name, symbol, currency, quantity, price, fee, amount(手填净额，优先于量×价±费), note |
 | `FxRate` | 汇率（pair=USDCNY）| rate, updated_at |
 | `Snapshot` | 每人每天一条净值快照 | user_id(FK), day(YYYY-MM-DD), total_cny, total_usd, ts |
 | `Note` | 投资心得 | user_id(FK), title, content, created_at, updated_at |
 
-**枚举**：`Currency`(CNY/USD/HKD) · `AssetType`(stock/etf/fund/bond/crypto/cash) · `Market`(A/HK/US/FUND/CRYPTO/NONE) · `HoldingSource`(manual/derived) · `HoldingStatus`(open/closed) · `TxnAction`(buy/sell/dividend/deposit/withdraw/other)
+**枚举**：`Currency`(CNY/USD/HKD) · `AssetType`(stock/etf/fund/bond/crypto/cash) · `Market`(A/HK/US/FUND/CRYPTO/NONE) · `HoldingSource`(manual/derived) · `HoldingStatus`(open/closed) · `TxnAction`(buy/sell/adjust/dividend/deposit/withdraw/cash_adjust/other)
 
 **四个计算口径函数（改动需谨慎，前后端都依赖其语义）**：
 - `market_value(h)`：`manual_value` 优先，否则 `quantity × current_price`，都没有记 0。
@@ -119,6 +123,24 @@ FinancialSystem/
 
 **绑定时机**：每次创建/修改/删除交易时，`_sync_txn_holding()` 自动判断新旧 holding_id、触发受影响持仓的重算。
 
+### 现金账本（backend/cash_service.py，与持仓重放并行）
+
+**核心设计**：现金按 **(user, platform, currency)** 从现金流水重放余额，与持仓重放共用同一条流水、同一 DB 事务、幂等重算。
+
+| 动作 | 现金流语义 |
+|---|---|
+| `cash_adjust` | 现金校准/初始化：`amount` 为该时点**绝对余额**，覆盖此前流水并建立基线 |
+| `deposit` / `withdraw` | +amount / −amount（amount 缺失回退 quantity） |
+| `dividend` | +amount（实际到账） |
+| `buy` / `sell` | −(量×价+费) / +(量×价−费)；手填 `amount` 时按实际净额（不重复计费） |
+| `adjust` / `other` | 无现金流 |
+
+**锚定规则**：首条「显式现金记录」（cash_adjust/deposit/withdraw/dividend）之前，buy/sell 不参与计现金——避免把不完整的历史买卖当成真实现金、也不虚构入金。未初始化（无显式现金记录）的现金账户 `balance=None`，前端提示初始化。
+
+**校验**：`check_cash` 把候选交易并入现有流水按时间线重放，任一中间时点余额为负即拒绝（出金/买入超余额、回填/编辑/删除均按时间线校验，绝不用 `max(balance,0)` 掩盖账目问题）。
+
+**回写**：`recalc_cash` 重算后回写 `asset_type=cash` 的 derived 持仓（`manual_value=余额`，未初始化置 None），供总览「现金」占比与总资产合计使用；现金变动不进入每日盈亏。
+
 ---
 
 ## 5. API 一览（前缀均为 /api，文档 http://localhost:8000/docs）
@@ -141,6 +163,8 @@ FinancialSystem/
 | POST | /api/transactions | 新建流水/校准；buy 自动建/绑 derived 持仓，adjust 重设绝对数量与平均成本，均触发重算 |
 | PUT | /api/transactions/{id} | 改流水；旧/新 derived 持仓均重算 |
 | DELETE | /api/transactions/{id} | 删流水；相关 derived 持仓重算 |
+| GET | /api/cash | 现金账户汇总（按平台+币种，含 initialized / balance / 基准日） |
+| GET | /api/cash/ledger?platform_id=&currency= | 某平台+币种现金流水（逐笔 flow 与运行余额） |
 | GET | /api/fx/rate | 当前汇率 |
 | POST | /api/fx/refresh | 刷新汇率 |
 | GET | /api/summary?currency= | 总资产/今日涨跌/未实现盈亏/已实现盈亏/总收益；触发每日快照 upsert |
@@ -167,6 +191,7 @@ FinancialSystem/
 5. **刷新行情**：Dashboard 点「更新行情」→ `POST /api/holdings/refresh-prices` → `price_provider` 按 market/symbol 抓价 → 写回 `current_price`/`prev_close`。
 6. **看总览**：`GET /api/summary?currency=CNY|USD` → 后端用 `market_value`/`day_change`/`cost_basis` 累加 + 已实现盈亏 + `FxRate` 换算 → 顺带 upsert 每日快照。
 7. **币种切换**：前端只换 `currency` 参数重拉 summary，金额由后端换算。
+8. **现金记账**：入金/出金/分红/现金校准/买卖 → `check_cash` 时间线校验 → `recalc_cash` 按 (平台+币种) 重放并回写 cash holding；未初始化时买卖不虚构现金。
 
 ---
 
@@ -175,6 +200,7 @@ FinancialSystem/
 - **加一种资产类型/市场** → 改 `models.py` 枚举 + `price_provider.py` 抓价分支 + 前端 `constants.js` 文案。
 - **改市值/涨亏算法** → 只动 `models.py` 的 `market_value`/`day_change`，前后端都复用，勿在别处重算。
 - **改持仓派生逻辑** → 只动 `position.py` 的 `replay_transactions`（注意 `adjust` 校准流水的回放顺序、绝对数量语义与成本缺失标志 `realized_pnl_incomplete`），测试在 `tests/test_position.py` 与 `tests/test_holding_calibration.py`。
+- **改现金口径** → 只动 `cash_service.py` 的 `cash_flow` / `replay_cash` / 锚定规则，前端镜像在 `frontend/src/cash.js`，测试在 `tests/test_cash.py`。
 - **加接口** → 在对应 `routers/*.py` 加路由，并在前端 `api/index.js` 同步加函数。
 - **改数据库结构** → 改 `models.py` 后在 `database.py` 的 `init_db` 里加 `addColumn`（SQLite 不支持自动迁移）；开发期也可删 `backend/data.db` 重建。
 - **上云**：SQLite→PostgreSQL 改 `DATABASE_URL` 环境变量；APScheduler 定时刷新；券商 API 直连（见 README Roadmap）。

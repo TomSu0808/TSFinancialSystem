@@ -46,7 +46,7 @@ The hosted version supports registration, login, HTTPS, and isolated multi-user 
 | Dashboard | Review total assets, daily change, total return, unrealized / realized P&L, allocation, net-worth charts, and data status. |
 | Market and FX refresh | Refresh A-share, HK, US, fund, crypto, and USD/CNY FX data through free data sources. |
 | CSV import and reconciliation | Import Futu, IBKR, or generic CSV files with preview validation, deduplication, commit, and reconciliation. |
-| Cash ledger | Deposit and withdraw records maintain derived cash holdings per account and currency. |
+| Cash ledger | Manage cash per account and currency: deposit, withdraw, dividend, and cash adjustment link to buy/sell flows, with init/calibrate, a cash ledger, and negative-balance checks. |
 | Decision log | Track thesis, risk, review, action items, and observations, linked to symbols or holdings. |
 | AI research workspace | Generate Chinese or English research reports with GPT, DeepSeek, GLM, Claude, or other OpenAI-compatible providers. |
 | AI action loop | Extract action items from AI reports into the decision log and track their status over time. |
@@ -57,7 +57,7 @@ The hosted version supports registration, login, HTTPS, and isolated multi-user 
 ## Typical Workflow
 
 1. Register an account and create platforms for brokers, banks, wallets, or custom accounts.
-2. Add manual holdings, or record buy, sell, dividend, deposit, and withdraw transactions.
+2. Add manual holdings, or record buy, sell, dividend, deposit, withdraw, and cash-adjustment transactions.
 3. Import historical transactions with CSV when migrating existing records.
 4. Refresh market prices and FX rates, or enable scheduled refresh on the Dashboard.
 5. Review total assets, returns, allocation, net-worth trend, and data freshness.
@@ -70,8 +70,8 @@ The hosted version supports registration, login, HTTPS, and isolated multi-user 
 | --- | --- |
 | Dashboard | Total assets, daily P&L, return breakdown, allocation, net-worth chart, data status, and refresh controls. |
 | Platforms | Organize assets by broker, bank, wallet, or custom account. |
-| Holding detail | Manage manual assets and inspect derived holdings, cost, P&L, and research summaries. |
-| Transactions | Record, search, filter, and import buy / sell / dividend / deposit / withdraw records. |
+| Holding detail | Manage manual assets and inspect derived holdings, cost, P&L, research summaries, and per-currency cash accounts. |
+| Transactions | Record, search, filter, and import buy / sell / dividend / deposit / withdraw / cash-adjustment records; the buy/sell form shows current holdings and cash impact. |
 | AI Research | Select a template, choose a symbol or portfolio, and generate structured Markdown reports. |
 | Decision Log | Track thesis, risks, reviews, action items, and links to holdings or AI reports. |
 | Alerts | Manage alert rules and review triggered events or refresh failures. |

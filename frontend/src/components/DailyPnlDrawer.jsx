@@ -43,6 +43,7 @@ export default function DailyPnlDrawer({ open, onClose, masked, refreshKey }) {
   const [detailRevision, setDetailRevision] = useState(0)
   const { upColor, downColor } = useColorScheme()
   const screens = Grid.useBreakpoint()
+  const isMobile = !screens.sm
 
   const todayStr = new Date().toISOString().slice(0, 10)
   const todayY = parseInt(todayStr.slice(0, 4), 10)
@@ -95,6 +96,8 @@ export default function DailyPnlDrawer({ open, onClose, masked, refreshKey }) {
     const cells = []
     let total = 0
     let hasTotal = false
+    let recorded = 0
+    let pastDays = 0
     for (let r = 0; r < rows; r++) {
       const line = []
       for (let wd = 0; wd < 7; wd++) {
@@ -103,12 +106,14 @@ export default function DailyPnlDrawer({ open, onClose, masked, refreshKey }) {
         const key = toDay(new Date(Date.UTC(month.y, month.m, dayNum)))
         const item = byDay[key]
         line.push({ dayNum, key, item, weekend: wd >= 5 })
-        if (item && item.pnl != null) { total += item.pnl; hasTotal = true }
+        const isFuture = key > todayStr
+        if (!isFuture) pastDays++
+        if (item && item.pnl != null) { total += item.pnl; hasTotal = true; recorded++ }
       }
       cells.push(line)
     }
-    return { cells, total, hasTotal }
-  }, [month, byDay])
+    return { cells, total, hasTotal, recorded, incomplete: recorded < pastDays }
+  }, [month, byDay, todayStr])
 
   const isCurrentMonth = month.y === todayY && month.m === todayM
   const shiftMonth = (delta) => setMonth((m) => {
@@ -137,27 +142,43 @@ export default function DailyPnlDrawer({ open, onClose, masked, refreshKey }) {
           <Button type="text" size="small" icon={<LeftOutlined />} onClick={() => shiftMonth(-1)} />
           <Typography.Text strong style={{ fontSize: 15 }}>{month.y}年{month.m + 1}月</Typography.Text>
           <Button type="text" size="small" icon={<RightOutlined />} disabled={isCurrentMonth} onClick={() => shiftMonth(1)} />
+          {!isCurrentMonth && (
+            <Button type="link" size="small" onClick={() => setMonth({ y: todayY, m: todayM })}>回到本月</Button>
+          )}
         </Space>
-        {cal.hasTotal && (
-          <Typography.Text strong style={{ color: masked ? undefined : cal.total > 0 ? upColor : cal.total < 0 ? downColor : undefined, fontSize: 14 }}>
-            本月 {money(cal.total)}
-          </Typography.Text>
+        {cal.hasTotal ? (
+          <Space size={6} align="center" wrap>
+            <Typography.Text strong style={{ color: masked ? undefined : cal.total > 0 ? upColor : cal.total < 0 ? downColor : undefined, fontSize: 14 }}>
+              本月 {money(cal.total)}
+            </Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>已记录 {cal.recorded} 天</Typography.Text>
+            {cal.incomplete && <Tag color="orange" style={{ fontSize: 11, marginInlineEnd: 0 }}>数据不完整</Tag>}
+          </Space>
+        ) : (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>本月暂无记录</Typography.Text>
         )}
       </div>
       {/* 星期表头 */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6, marginBottom: 4 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: isMobile ? 4 : 6, marginBottom: 4 }}>
         {WEEKDAYS.map((wd) => (
-          <div key={wd} style={{ textAlign: 'center', fontSize: 12, color: '#8c8c8c', padding: '2px 0' }}>{wd}</div>
+          <div key={wd} style={{ textAlign: 'center', fontSize: isMobile ? 11 : 12, color: '#8c8c8c', padding: '2px 0' }}>{wd}</div>
         ))}
       </div>
       {/* 日期格 */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: isMobile ? 4 : 6 }}>
         {cal.cells.flat().map((cell, i) => {
           if (!cell) return <div key={i} style={{ minHeight: 54 }} />
-          const pnl = cell.item?.pnl ?? null
+          const it = cell.item
+          const pnl = it?.pnl ?? null
           const color = pnl == null ? undefined : masked ? undefined : pnl > 0 ? upColor : pnl < 0 ? downColor : '#8c8c8c'
           const isToday = cell.key === todayStr
-          const clickable = !!cell.item
+          const isSelected = cell.key === selectedDay
+          const isFuture = cell.key > todayStr
+          const clickable = !!it
+          const statusText = it && pnl == null
+            ? (it.status === 'recorded' ? '待确认' : labels[it.status] || it.status)
+            : null
+          const noRecord = !it && !isFuture
           return (
             <Tooltip key={i} title={cellTooltip(cell)} mouseEnterDelay={0.05}>
               <div
@@ -165,24 +186,28 @@ export default function DailyPnlDrawer({ open, onClose, masked, refreshKey }) {
                 style={{
                   minHeight: 54, borderRadius: 8, padding: '4px 6px',
                   cursor: clickable ? 'pointer' : 'default',
-                  background: isToday ? 'rgba(22,119,255,0.06)' : cell.weekend ? 'rgba(0,0,0,0.02)' : 'transparent',
-                  border: isToday ? '1px solid #1677ff' : '1px solid transparent',
+                  background: isToday ? 'rgba(22,119,255,0.06)' : isSelected ? 'rgba(250,140,22,0.10)' : cell.weekend ? 'rgba(0,0,0,0.02)' : 'transparent',
+                  border: isToday ? '1px solid #1677ff' : isSelected ? '1px solid #ffa940' : '1px solid transparent',
                   boxSizing: 'border-box',
                 }}
               >
-                <div style={{ fontSize: 11, lineHeight: '16px', color: cell.weekend ? '#bfbfbf' : '#8c8c8c' }}>{cell.dayNum}</div>
-                {pnl != null && (
+                <div style={{ fontSize: isMobile ? 11 : 12, lineHeight: '16px', color: isFuture ? '#d9d9d9' : cell.weekend ? '#bfbfbf' : '#8c8c8c' }}>{cell.dayNum}</div>
+                {pnl != null ? (
                   <div style={{ fontSize: 12, fontWeight: 600, lineHeight: '22px', color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {masked ? '·' : compact(pnl)}
                   </div>
-                )}
+                ) : statusText ? (
+                  <div style={{ fontSize: isMobile ? 10 : 11, lineHeight: '20px', color: '#bfbfbf', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{statusText}</div>
+                ) : noRecord ? (
+                  <div style={{ fontSize: 11, lineHeight: '20px', color: '#d9d9d9' }}>—</div>
+                ) : null}
               </div>
             </Tooltip>
           )
         })}
       </div>
       <div style={{ marginTop: 10, fontSize: 12, color: '#8c8c8c' }}>
-        红涨绿跌 · 点击日期看逐仓位明细 · 灰字为零或无变化
+        点击日期看逐仓位明细 · 灰字为零或无变化 · — 为无记录（涨跌颜色随显示设置）
       </div>
     </div>
   )
@@ -226,7 +251,7 @@ export default function DailyPnlDrawer({ open, onClose, masked, refreshKey }) {
     <div>
       <Space direction="vertical" size={12} style={{ display: 'flex' }}>
         <Space size={4}>
-          <Button size="small" type="text" icon={<ArrowLeftOutlined />} onClick={() => setView(screens.sm ? 'calendar' : 'list')}>返回</Button>
+          <Button size="small" type="text" icon={<ArrowLeftOutlined />} onClick={() => setView('calendar')}>返回</Button>
           <Typography.Text strong>{selectedDay}</Typography.Text>
           <Typography.Text type="secondary">UTC</Typography.Text>
         </Space>
@@ -306,7 +331,7 @@ export default function DailyPnlDrawer({ open, onClose, masked, refreshKey }) {
               ]} />
             )}
             {error ? <Alert type="error" showIcon message={error} action={<Button onClick={() => setRevision((v) => v + 1)}>重试</Button>} />
-              : view === 'calendar' && screens.sm ? calendarView : listView}
+              : view === 'calendar' ? calendarView : listView}
           </>
         )}
         <Alert type="info" showIcon message="统计口径"

@@ -9,7 +9,7 @@ from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from auth import get_current_user
-from cash_service import recalc_cash
+from cash_service import CASH_ACTIONS, check_cash, recalc_cash, replay_cash
 from database import get_session
 from models import (
     Currency,
@@ -82,7 +82,8 @@ def _sync_txn_holding(session: Session, txn: Transaction, user: User) -> None:
     买入及校准可自动建仓；卖出/分红绑定已有持仓。改了 symbol/platform/currency
     会重绑到新持仓，新旧持仓都会重算。非持仓动作清空 holding_id，避免悬空 FK。
 
-    deposit / withdraw 通过 cash_service.recalc_cash 统一重算现金余额。
+    deposit / withdraw / cash_adjust / buy / sell / dividend 通过 cash_service.recalc_cash
+    统一重算现金余额（现金与持仓在同一 DB 事务内，幂等）。
     """
     affected = set()
     if txn.holding_id is not None:
@@ -102,20 +103,16 @@ def _sync_txn_holding(session: Session, txn: Transaction, user: User) -> None:
             txn.holding_id = None
             session.add(txn)
             session.flush()
-    elif txn.action in (TxnAction.deposit, TxnAction.withdraw):
-        # 现金账本：统一重算
+    else:
+        # deposit / withdraw / cash_adjust / other：非持仓动作，清空 holding_id
         if txn.holding_id is not None:
             affected.add(txn.holding_id)  # 原 buy/sell 重算
             txn.holding_id = None
             session.add(txn)
             session.flush()
-        if txn.platform_id is not None and txn.currency is not None:
-            recalc_cash(session, user, txn.platform_id, txn.currency)
-    else:
-        if txn.holding_id is not None:
-            txn.holding_id = None
-            session.add(txn)
-            session.flush()
+    # 现金相关动作统一重算现金（buy/sell 仅在有显式现金记录后才会计入，见 cash_service）
+    if txn.action in CASH_ACTIONS and txn.platform_id is not None and txn.currency is not None:
+        recalc_cash(session, user, txn.platform_id, txn.currency)
     for hid in affected:
         recompute_holding(session, hid)
 
@@ -159,7 +156,7 @@ def _validate_row(row_num: int, row: dict, plat_map: dict) -> tuple:
         try:
             d["action"] = TxnAction(action_str)
         except ValueError:
-            errors.append(f"action 无效：{action_str}，可选：buy/sell/adjust/dividend/deposit/withdraw/other")
+            errors.append(f"action 无效：{action_str}，可选：buy/sell/adjust/dividend/deposit/withdraw/cash_adjust/other")
 
     # platform（可选；若填写必须匹配当前用户的平台名称）
     plat_str = (row.get("platform") or "").strip()
@@ -336,6 +333,7 @@ def create_transaction(
     txn = Transaction.model_validate(data, update={"user_id": user.id})
     txn.holding_id = None  # always system-resolved; never trust client input
     _check_oversell(session, user, txn)  # 禁止超卖
+    check_cash(session, user, txn)  # 现金时间线校验：出金/买入不能导致负余额
     prepare_position(session, user, txn)
     session.add(txn)
     session.flush()
@@ -431,6 +429,7 @@ async def commit_import(
         txn = Transaction.model_validate(tc, update={"user_id": user.id})
         txn.holding_id = None
         _check_oversell(session, user, txn)  # CSV 导入也禁止超卖
+        check_cash(session, user, txn)  # 现金时间线校验
         prepare_position(session, user, txn)
         session.add(txn)
         session.flush()
@@ -449,6 +448,8 @@ def update_transaction(
     user: User = Depends(get_current_user),
 ):
     txn = _owned(session, txn_id, user)
+    old_platform_id = txn.platform_id
+    old_currency = txn.currency
     values = data.model_dump(exclude_unset=True)
     values.pop("holding_id", None)  # holding_id is system-managed; ignore client input
     if "platform_id" in values:
@@ -472,10 +473,25 @@ def update_transaction(
         exclude_txn_id=txn_id,
     )
     _check_oversell(session, user, txn, exclude_txn_id=txn_id)  # 禁止超卖
+    check_cash(session, user, txn, exclude_txn_id=txn_id)  # 新账户现金时间线校验
     prepare_position(session, user, txn)
     session.add(txn)
     session.flush()
     _sync_txn_holding(session, txn, user)
+    # 改了平台/币种时，旧现金账户也要重算并做时间线校验（交易从旧账户移出）
+    if (txn.action in CASH_ACTIONS
+            and (old_platform_id, old_currency) != (txn.platform_id, txn.currency)
+            and old_platform_id is not None and old_currency is not None):
+        with session.no_autoflush:
+            old_cash_txns = session.exec(select(Transaction).where(
+                Transaction.user_id == user.id,
+                Transaction.platform_id == old_platform_id,
+                Transaction.currency == old_currency,
+                Transaction.action.in_(CASH_ACTIONS),
+                Transaction.id != txn_id,
+            )).all()
+        replay_cash(old_cash_txns, check_negative=True)
+        recalc_cash(session, user, old_platform_id, old_currency)
     session.commit()
     session.refresh(txn)
     return txn
@@ -497,12 +513,23 @@ def delete_transaction(
             Transaction.holding_id == holding_id, Transaction.id != txn_id,
         )).all()
         replay_transactions(remaining, check_oversell=True)
+    # 现金时间线校验：删除后（剔除自身）任一中间时点负余额即拒绝
+    if action in CASH_ACTIONS and platform_id is not None and currency is not None:
+        with session.no_autoflush:
+            remaining_cash = session.exec(select(Transaction).where(
+                Transaction.user_id == user.id,
+                Transaction.platform_id == platform_id,
+                Transaction.currency == currency,
+                Transaction.action.in_(CASH_ACTIONS),
+                Transaction.id != txn_id,
+            )).all()
+        replay_cash(remaining_cash, check_negative=True)
     session.delete(txn)
     session.flush()
     if holding_id is not None:
         recompute_holding(session, holding_id)
-    # 删除 deposit/withdraw 后重算现金
-    if action in (TxnAction.deposit, TxnAction.withdraw) and platform_id is not None and currency is not None:
+    # 删除现金相关动作后重算现金
+    if action in CASH_ACTIONS and platform_id is not None and currency is not None:
         recalc_cash(session, user, platform_id, currency)
     session.commit()
     return {"ok": True}

@@ -96,11 +96,11 @@ def record_daily_pnl(session: Session, user_id: int, now=None) -> DailyPnl:
         snapshots.append(_snapshot(h, platform_name, cumulative, unrealized, is_excluded, reason))
 
     def txn_digest(cutoff):
-        # 入出金不影响投资收益，未来交易不计入当日检查点。
+        # 入出金/现金校准不影响投资收益，未来交易不计入当日检查点。
         return _digest(sorted([
             (t.id, t.holding_id, t.date, t.action.value, t.currency.value,
              t.quantity, t.price, t.fee, t.amount)
-            for t in txns if t.date <= cutoff and t.action not in ("deposit", "withdraw")
+            for t in txns if t.date <= cutoff and t.action not in ("deposit", "withdraw", "cash_adjust")
         ], key=lambda x: x[0]))
 
     basis = {"manual": _digest(sorted(manual_basis)), "transactions": txn_digest(day),

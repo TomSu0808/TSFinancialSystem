@@ -125,6 +125,8 @@ class GenericImporter(BaseImporter):
                 "分红": "dividend", "股息": "dividend", "dividend": "dividend",
                 "入金": "deposit", "存入": "deposit", "deposit": "deposit",
                 "出金": "withdraw", "取出": "withdraw", "withdraw": "withdraw",
+                "现金校准": "cash_adjust", "现金初始化": "cash_adjust",
+                "初始化": "cash_adjust", "cash_adjust": "cash_adjust",
             }
             if d.action in action_map:
                 d.action = action_map[d.action]

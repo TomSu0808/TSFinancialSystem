@@ -11,7 +11,6 @@ from typing import List, Optional
 from fastapi import HTTPException
 from sqlmodel import Session
 
-from cash_service import get_cash_balance
 from models import Currency, Transaction, TxnAction, User
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -42,7 +41,8 @@ def validate_transaction(
     # ── 通用校验 ──
     # action 必须有效（TxnAction 枚举已保证，但防御性检查）
     if action not in (TxnAction.buy, TxnAction.sell, TxnAction.adjust, TxnAction.deposit,
-                      TxnAction.withdraw, TxnAction.dividend, TxnAction.other):
+                      TxnAction.withdraw, TxnAction.dividend, TxnAction.cash_adjust,
+                      TxnAction.other):
         errors.append(f"无效的交易类型: {action}")
 
     # date 格式
@@ -91,24 +91,18 @@ def validate_transaction(
             errors.append(f"{'入金' if action == TxnAction.deposit else '出金'}必须指定平台")
         if not currency:
             errors.append(f"{'入金' if action == TxnAction.deposit else '出金'}必须指定币种")
+        # 出金负余额校验由 cash_service.check_cash 按时间线统一处理（含编辑/回填/删除）。
 
-        # withdraw 不能超过现金余额
-        if action == TxnAction.withdraw and platform_id and currency and eff_amount and eff_amount > 0:
-            current_balance = get_cash_balance(session, user, platform_id, currency)
-            # 更新场景：排除自身交易后重算余额
-            if exclude_txn_id is not None:
-                txn = session.get(Transaction, exclude_txn_id)
-                if txn and txn.action == TxnAction.withdraw:
-                    # 把当前交易的金额加回去（因为它将被新值替换）
-                    old_amount = txn.amount or 0.0
-                    if old_amount <= 0:
-                        old_amount = txn.quantity or 0.0
-                    current_balance += old_amount
-            if eff_amount > current_balance + 1e-9:
-                errors.append(
-                    f"出金 {eff_amount} {currency.value} 超过当前现金余额 "
-                    f"{current_balance:.2f} {currency.value}"
-                )
+    # ── cash_adjust（现金校准/初始化）校验 ──
+    if action == TxnAction.cash_adjust:
+        if amount is None or amount < 0:
+            errors.append("现金校准的余额必须是非负数（填写该时点的绝对余额）")
+        if not platform_id:
+            errors.append("现金校准必须指定平台")
+        if not currency:
+            errors.append("现金校准必须指定币种")
+        if quantity not in (None, 0) or price not in (None, 0) or fee not in (None, 0):
+            errors.append("现金校准不涉及数量/价格/手续费，请留空")
 
     # ── dividend 校验 ──
     if action == TxnAction.dividend:

@@ -178,6 +178,7 @@ def init_db() -> None:
         # PostgreSQL 原生枚举不会由 create_all 自动扩展。
         with engine.begin() as conn:
             conn.execute(text("ALTER TYPE txnaction ADD VALUE IF NOT EXISTS 'adjust'"))
+            conn.execute(text("ALTER TYPE txnaction ADD VALUE IF NOT EXISTS 'cash_adjust'"))
     _migrate_add_user_id()  # 兼容 SQLite 和 PostgreSQL
 
 

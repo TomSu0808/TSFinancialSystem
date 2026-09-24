@@ -110,6 +110,11 @@ export const updateHolding = (id, data) => client.put(`/holdings/${id}`, data).t
 export const deleteHolding = (id) => client.delete(`/holdings/${id}`).then((r) => r.data)
 export const refreshPrices = () => client.post('/holdings/refresh-prices').then((r) => r.data)
 
+// ---- 现金 ----
+export const listCash = (params) => client.get('/cash', { params }).then((r) => r.data)
+export const getCashLedger = (platformId, currency) =>
+  client.get('/cash/ledger', { params: { platform_id: platformId, currency } }).then((r) => r.data)
+
 // ---- 汇率 ----
 export const getRate = () => client.get('/fx/rate').then((r) => r.data)
 export const refreshRate = () => client.post('/fx/refresh').then((r) => r.data)

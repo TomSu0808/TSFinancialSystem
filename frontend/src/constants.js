@@ -32,6 +32,7 @@ export const TXN_ACTIONS = [
   { value: 'dividend', label: '分红/利息' },
   { value: 'deposit', label: '入金' },
   { value: 'withdraw', label: '出金' },
+  { value: 'cash_adjust', label: '现金校准/初始化' },
   { value: 'other', label: '其它' },
 ]
 

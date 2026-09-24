@@ -8,10 +8,11 @@ import { BookOutlined, PlusOutlined, ReloadOutlined, ArrowLeftOutlined, LinkOutl
 import dayjs from 'dayjs'
 import {
   listPlatforms, listHoldings, createHolding, updateHolding, deleteHolding, refreshPrices,
-  createTransaction, getRate, getHoldingResearchBrief,
+  createTransaction, getRate, getHoldingResearchBrief, listCash, getCashLedger,
 } from '../api'
 import {
   CURRENCIES, ASSET_TYPES, MARKETS, MARKET_LABEL, ASSET_TYPE_LABEL, CURRENCY_SYMBOL, fmt,
+  TXN_ACTION_LABEL,
 } from '../constants'
 import { marketValue, dayChange, costBasis, profitOf, isDerived, isClosed, isAnomalous } from '../holdings'
 import { useColorScheme } from '../colorScheme.jsx'
@@ -52,6 +53,16 @@ export default function PlatformDetail() {
   const [briefData, setBriefData] = useState(null)
   const [briefLoading, setBriefLoading] = useState(false)
 
+  // Cash accounts + ledger
+  const [cashAccounts, setCashAccounts] = useState([])
+  const [cashEntryOpen, setCashEntryOpen] = useState(false)
+  const [cashEntryAction, setCashEntryAction] = useState('deposit') // deposit | withdraw | cash_adjust
+  const [cashEntrySaving, setCashEntrySaving] = useState(false)
+  const [cashForm] = Form.useForm()
+  const [ledgerOpen, setLedgerOpen] = useState(false)
+  const [ledgerData, setLedgerData] = useState(null)
+  const [ledgerLoading, setLedgerLoading] = useState(false)
+
   const rate = fx?.updated_at ? fx.rate : null
   const conv = (amount, srcCur) => {
     const result = convertAmount(amount, srcCur, displayCurrency, rate)
@@ -63,14 +74,16 @@ export default function PlatformDetail() {
   const load = async () => {
     setLoading(true)
     try {
-      const [plats, holdings, fxRate] = await Promise.all([
+      const [plats, holdings, fxRate, cash] = await Promise.all([
         listPlatforms(),
         listHoldings({ platform_id: platformId, include_closed: showClosed }),
         getRate(),
+        listCash({ platform_id: platformId }),
       ])
       setPlatform(plats.find((p) => p.id === platformId) || null)
       setData(holdings)
       setFx(fxRate)
+      setCashAccounts(cash)
     } catch (e) {
       message.error('加载失败：' + e.message)
     } finally {
@@ -189,6 +202,87 @@ export default function PlatformDetail() {
       setBriefLoading(false)
     }
   }
+
+  const openCashEntry = (action, currency = 'CNY') => {
+    setCashEntryAction(action)
+    cashForm.resetFields()
+    cashForm.setFieldsValue({ currency, date: dayjs() })
+    setCashEntryOpen(true)
+  }
+
+  const submitCashEntry = async () => {
+    try {
+      const v = await cashForm.validateFields()
+      setCashEntrySaving(true)
+      await createTransaction({
+        platform_id: platformId, currency: v.currency, action: cashEntryAction,
+        date: v.date.format('YYYY-MM-DD'), amount: v.amount, note: v.note,
+      })
+      message.success('已保存现金记录')
+      setCashEntryOpen(false)
+      load()
+    } catch (e) {
+      if (!e.errorFields) message.error('保存失败：' + (e.response?.data?.detail || e.message))
+    } finally {
+      setCashEntrySaving(false)
+    }
+  }
+
+  const openLedger = async (currency) => {
+    setLedgerOpen(true)
+    setLedgerData(null)
+    setLedgerLoading(true)
+    try {
+      setLedgerData(await getCashLedger(platformId, currency))
+    } catch (e) {
+      message.error('加载现金流水失败：' + e.message)
+    } finally {
+      setLedgerLoading(false)
+    }
+  }
+
+  const cashColumns = [
+    { title: '币种', dataIndex: 'currency', width: 90, render: (v) => <Tag>{v}</Tag> },
+    {
+      title: '现金余额', dataIndex: 'balance', align: 'right',
+      render: (v, r) => r.initialized
+        ? `${CURRENCY_SYMBOL[r.currency] || ''}${fmt(v)}`
+        : <Tag color="orange">未初始化</Tag>,
+    },
+    {
+      title: '基准', dataIndex: 'last_anchor_date', width: 140,
+      render: (v, r) => (r.initialized ? (v || '—') : '请先初始化'),
+    },
+    {
+      title: '操作', width: 220,
+      render: (_, r) => (
+        <Space size={4}>
+          <a onClick={() => openCashEntry('deposit', r.currency)}>入金</a>
+          <a onClick={() => openCashEntry('withdraw', r.currency)}>出金</a>
+          <a onClick={() => openCashEntry('cash_adjust', r.currency)}>校准</a>
+          <a onClick={() => openLedger(r.currency)}>流水</a>
+        </Space>
+      ),
+    },
+  ]
+
+  const ledgerColumns = [
+    { title: '日期', dataIndex: 'date', width: 100 },
+    { title: '类型', dataIndex: 'action', width: 90, render: (v) => TXN_ACTION_LABEL[v] || v },
+    {
+      title: '变动', dataIndex: 'flow', align: 'right', width: 110,
+      render: (v) => {
+        if (v == null) return <span style={{ color: '#bbb' }}>—</span>
+        const up = v >= 0
+        return <span style={{ color: up ? upColor : downColor }}>{up ? '+' : ''}{fmt(v)}</span>
+      },
+    },
+    {
+      title: '余额', dataIndex: 'balance', align: 'right', width: 110,
+      render: (v) => (v == null ? '—' : fmt(v)),
+    },
+    { title: '备注', dataIndex: 'note', ellipsis: true },
+  ]
 
   const columns = useMemo(() => [
     {
@@ -333,6 +427,78 @@ export default function PlatformDetail() {
     >
       <Table rowKey="id" loading={loading} dataSource={data} columns={columns} pagination={false} scroll={{ x: 860 }}
         rowClassName={(r) => (isClosed(r) ? 'row-closed' : '')} />
+
+      {/* 现金账户 */}
+      <Card size="small" title="现金账户" style={{ marginTop: 16 }}
+        extra={
+          <Space size={4}>
+            <Button size="small" onClick={() => openCashEntry('cash_adjust')}>初始化/校准</Button>
+            <Button size="small" type="primary" onClick={() => openCashEntry('deposit')}>入金</Button>
+            <Button size="small" onClick={() => openCashEntry('withdraw')}>出金</Button>
+          </Space>
+        }
+      >
+        {cashAccounts.length === 0 ? (
+          <Empty description="该账户暂无现金记录（买卖、分红等需先有现金基准）" image={Empty.PRESENTED_IMAGE_SIMPLE}>
+            <Button type="primary" onClick={() => openCashEntry('cash_adjust')}>初始化现金余额</Button>
+          </Empty>
+        ) : (
+          <Table rowKey={(r) => `${r.platform_id}-${r.currency}`} dataSource={cashAccounts} pagination={false} size="small" columns={cashColumns} />
+        )}
+      </Card>
+
+      {/* 现金入金/出金/校准 Modal */}
+      <Modal
+        title={cashEntryAction === 'cash_adjust' ? '初始化/校准现金' : cashEntryAction === 'deposit' ? '入金' : '出金'}
+        open={cashEntryOpen}
+        onOk={submitCashEntry}
+        confirmLoading={cashEntrySaving}
+        onCancel={() => setCashEntryOpen(false)}
+        destroyOnHidden
+      >
+        <Typography.Paragraph type="secondary">
+          {cashEntryAction === 'cash_adjust'
+            ? '金额填写该时点的现金绝对余额（不是增减量），用于建立/修正现金基准；同一币种只需初始化一次。'
+            : cashEntryAction === 'deposit' ? '记录一笔资金转入该账户。' : '记录一笔资金转出该账户。'}
+        </Typography.Paragraph>
+        <Form form={cashForm} layout="vertical">
+          <Form.Item name="currency" label="币种" rules={[{ required: true }]}>
+            <Select options={CURRENCIES} />
+          </Form.Item>
+          <Form.Item name="date" label="日期" rules={[{ required: true, message: '请选择日期' }]}>
+            <DatePicker style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="amount" label={cashEntryAction === 'cash_adjust' ? '现金余额' : '金额'} rules={[{ required: true, message: '请填写金额' }]}>
+            <InputNumber min={0} style={{ width: '100%' }} placeholder={cashEntryAction === 'cash_adjust' ? '该时点现金余额' : '金额'} />
+          </Form.Item>
+          <Form.Item name="note" label="备注">
+            <Input placeholder="可选" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 现金流水 Drawer */}
+      <Drawer
+        title={`现金流水 · ${ledgerData?.currency || ''}`}
+        open={ledgerOpen}
+        onClose={() => setLedgerOpen(false)}
+        width={480}
+      >
+        {ledgerLoading ? (
+          <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+        ) : ledgerData ? (
+          <>
+            <div style={{ marginBottom: 12 }}>
+              {ledgerData.initialized ? (
+                <div>当前余额 <b style={{ fontSize: 16 }}>{fmt(ledgerData.balance)} {CURRENCY_SYMBOL[ledgerData.currency] || ''}</b></div>
+              ) : (
+                <Tag color="orange">未初始化（首条现金校准前，买卖不计入现金）</Tag>
+              )}
+            </div>
+            <Table rowKey="id" dataSource={ledgerData.entries} pagination={false} size="small" columns={ledgerColumns} />
+          </>
+        ) : null}
+      </Drawer>
 
       <Modal title={`校准持仓 · ${calibrating?.name || calibrating?.symbol || ''}`}
         open={!!calibrating} onOk={saveCalibration} confirmLoading={calibrationSaving}
