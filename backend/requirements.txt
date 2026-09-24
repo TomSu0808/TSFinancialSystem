@@ -1,6 +1,9 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
-sqlmodel>=0.0.16
+# 锁 0.0.39（与本地测试环境一致）。0.0.40+ 要求 datetime 必须带时区信息，
+# 现有代码用 naive datetime.utcnow()，升级后登录等写库会抛 500
+#（"Datetime values must have timezone information"）。
+sqlmodel==0.0.39
 requests>=2.31
 # 认证：JWT 签发/校验、bcrypt 密码哈希、.env 配置加载
 python-jose[cryptography]>=3.3
