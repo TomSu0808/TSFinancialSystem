@@ -7,12 +7,12 @@
 - buy / sell：-(量×价+费) / +(量×价-费)；手填 amount 时按实际净额（不重复计费）
 - adjust（持仓校准）/ other：无现金流
 
-锚定规则：在第一条「显式现金记录」（cash_adjust/deposit/withdraw/dividend）之前，
-buy/sell 不参与计现金（避免把不完整的历史买卖当成真实现金）；其后按现金流累计。
+锚定规则：首笔卖出即开始追踪实际到账现金，无需先初始化。
+在首笔卖出或显式现金记录之前的买入不扣现金（历史入金可能未录入）；其后按现金流累计。
 cash_adjust 出现时把余额重置为绝对金额（后续校准），之前的流水被其覆盖、不重复计。
 
-未初始化（无任何显式现金记录）→ cash holding.manual_value = None，前端提示初始化。
-负余额在写入时按时间线校验拒绝，绝不在重算时用 max(balance, 0) 掩盖账目问题。
+未追踪（只有历史买入）→ cash holding.manual_value = None，前端提示校准。
+新增或扩大负余额在写入时按时间线拒绝；历史缺口允许校准修复，重算不截断负数。
 """
 from datetime import datetime
 from decimal import Decimal
@@ -33,14 +33,6 @@ CASH_ACTIONS = (
     TxnAction.buy,
     TxnAction.sell,
 )
-# 建立账户基线（让 buy/sell 开始计现金）的显式现金记录
-EXPLICIT_CASH_ACTIONS = (
-    TxnAction.cash_adjust,
-    TxnAction.deposit,
-    TxnAction.withdraw,
-    TxnAction.dividend,
-)
-
 _ACTION_LABEL = {
     TxnAction.buy: "买入",
     TxnAction.sell: "卖出",
@@ -89,33 +81,42 @@ def cash_flow(txn: Transaction) -> Optional[Decimal]:
 class CashState:
     def __init__(self) -> None:
         self.balance = Decimal("0")
-        self.started = False                 # 已出现显式现金记录（此后 buy/sell 计入）
+        self.started = False                 # 已出现卖出或显式现金记录
         self.cash_adjust_count = 0
         self.last_anchor_date: Optional[str] = None
 
 
-def replay_cash(txns: Iterable[Transaction], *, check_negative: bool = False) -> CashState:
+def replay_cash(
+    txns: Iterable[Transaction], *, check_negative: bool = False,
+    previous_txns: Optional[Iterable[Transaction]] = None,
+) -> CashState:
     """按 (date, id) 升序重放现金流水，返回 CashState。
 
-    check_negative=True 时，任一中间时点余额为负即抛 HTTPException(400)。
+    check_negative=True 时拒绝负余额；升级前已存在的缺口允许保持或缩小，
+    以便补录现金校准。新流水或移动日期产生的负余额仍拒绝。
     """
     st = CashState()
+    previous_deficits = {
+        (entry['id'], entry['date']): to_d(entry['balance'])
+        for entry in cash_ledger(previous_txns or [])
+        if entry['balance'] is not None and entry['balance'] < 0
+    } if check_negative else {}
     for t in sorted(txns, key=lambda x: (x.date or "", x.id or 0)):
         if t.action == TxnAction.cash_adjust:
             st.balance = _explicit_amount(t)
             st.started = True
             st.cash_adjust_count += 1
             st.last_anchor_date = t.date
-        elif t.action in (TxnAction.deposit, TxnAction.withdraw, TxnAction.dividend):
+        elif t.action in (TxnAction.deposit, TxnAction.withdraw, TxnAction.dividend, TxnAction.sell):
             st.balance += cash_flow(t)
             st.started = True
-        elif t.action in (TxnAction.buy, TxnAction.sell):
+        elif t.action == TxnAction.buy:
             if st.started:
                 st.balance += cash_flow(t)
-            # 首条显式现金记录之前：历史买卖被锚定覆盖，不参与计现金
+            # 现金开始追踪之前，不推测历史买入所用资金的来源。
         # adjust / other：无现金流
 
-        if check_negative and st.balance < 0:
+        if check_negative and st.balance < previous_deficits.get((t.id, t.date), Decimal('0')):
             label = _ACTION_LABEL.get(t.action, "交易")
             if t.action == TxnAction.withdraw:
                 msg = f"{t.date} 出金后现金余额为 {to_float(st.balance)}，超过当前现金余额"
@@ -209,11 +210,29 @@ def get_cash_balance(
     return to_float(st.balance) if st.started else 0.0
 
 
+def rebuild_sale_cash(session: Session, user_id: Optional[int] = None) -> None:
+    """升级/恢复备份时重建卖出现金投影；不修改流水，重复执行不会重复入账。
+
+    不完整历史可能产生负余额，保留真实重放结果以便用户校准，不伪造入金。
+    """
+    stmt = select(Transaction.user_id, Transaction.platform_id, Transaction.currency).where(
+        Transaction.action == TxnAction.sell,
+        Transaction.platform_id.is_not(None),
+    ).distinct()
+    if user_id is not None:
+        stmt = stmt.where(Transaction.user_id == user_id)
+    for uid, pid, currency in session.exec(stmt).all():
+        user = session.get(User, uid)
+        if user is not None:
+            recalc_cash(session, user, pid, currency)
+
+
 def check_cash(
     session: Session,
     user: User,
     txn: Transaction,
     exclude_txn_id: Optional[int] = None,
+    previous_txn: Optional[Transaction] = None,
 ) -> None:
     """按时间线校验现金：把候选交易并入现有流水重放，任一中间时点负余额即拒绝。
 
@@ -233,11 +252,14 @@ def check_cash(
         )).all()
     max_id = max((t.id or 0 for t in txns), default=0)
     candidate = txn.model_copy(update={"id": txn.id or (max_id + 1)})
-    replay_cash([*txns, candidate], check_negative=True)
+    previous = list(txns)
+    if previous_txn is not None and (previous_txn.platform_id, previous_txn.currency) == (txn.platform_id, txn.currency):
+        previous.append(previous_txn)
+    replay_cash([*txns, candidate], check_negative=True, previous_txns=previous)
 
 
 def cash_ledger(txns: Iterable[Transaction]) -> list:
-    """逐条现金流水：带符号 flow 与运行余额。未初始化期间的 buy/sell 计 flow=None、余额为 None。
+    """逐条现金流水：带符号 flow 与运行余额。开始追踪前的 buy 计 flow=None、余额为 None。
 
     cash_adjust 的 flow 记其绝对余额（语义为「校准至 X」）。
     """
@@ -250,11 +272,11 @@ def cash_ledger(txns: Iterable[Transaction]) -> list:
             balance = _explicit_amount(t)
             started = True
             flow = balance
-        elif t.action in (TxnAction.deposit, TxnAction.withdraw, TxnAction.dividend):
+        elif t.action in (TxnAction.deposit, TxnAction.withdraw, TxnAction.dividend, TxnAction.sell):
             flow = cash_flow(t)
             balance += flow
             started = True
-        elif t.action in (TxnAction.buy, TxnAction.sell):
+        elif t.action == TxnAction.buy:
             if started:
                 flow = cash_flow(t)
                 balance += flow

@@ -67,6 +67,135 @@ def test_partial_and_full_sell_cash_flow(client):
     assert _cash_value(client, pid) == 10980  # 7385 + (3600 - 5)
 
 
+def test_sell_without_cash_initialization_preserves_assets_until_withdrawal(client, session):
+    pid = _platform(client)
+    holding = client.post('/api/holdings', json={
+        'platform_id': pid, 'symbol': 'AAPL', 'name': 'Apple',
+        'currency': 'USD', 'market': 'US', 'quantity': 100,
+        'cost_price': 50, 'current_price': 60,
+    })
+    assert holding.status_code == 200
+    h = session.get(Holding, holding.json()['id'])
+    h.current_price = 60
+    session.add(h)
+    session.commit()
+    before = client.get('/api/summary?currency=USD').json()['total']
+    sold = _txn(client, platform_id=pid, action='sell', date='2026-01-02',
+                symbol='AAPL', currency='USD', quantity=40, price=60, fee=5)
+    assert sold.status_code == 200, sold.text
+    assert _cash_value(client, pid) == 2395
+    assert client.get('/api/summary?currency=USD').json()['total'] == before - 5
+    ledger = client.get(f'/api/cash/ledger?platform_id={pid}&currency=USD').json()
+    assert ledger['balance'] == ledger['entries'][-1]['balance'] == 2395
+    assert ledger['entries'][-1]['flow'] == 2395
+    withdrawn = _txn(client, platform_id=pid, action='withdraw', date='2026-01-03',
+                     currency='USD', amount=1000)
+    assert withdrawn.status_code == 200, withdrawn.text
+    assert _cash_value(client, pid) == 1395
+    assert client.get('/api/summary?currency=USD').json()['total'] == before - 1005
+
+
+def test_uninitialized_sale_cash_can_be_reinvested_edited_and_reversed(client):
+    pid = _platform(client)
+    base = dict(platform_id=pid, symbol='AAPL', currency='USD')
+    assert _txn(client, **base, action='buy', date='2026-01-01', quantity=10, price=100).status_code == 200
+    sold = _txn(client, **base, action='sell', date='2026-01-02', quantity=10, price=120).json()
+    assert _cash_value(client, pid) == 1200
+    bought = _txn(client, **base, action='buy', date='2026-01-03', quantity=5, price=100)
+    assert bought.status_code == 200, bought.text
+    assert _cash_value(client, pid) == 700
+    assert client.put(f"/api/transactions/{sold['id']}", json={'price': 110}).status_code == 200
+    assert _cash_value(client, pid) == 600
+    assert client.delete(f"/api/transactions/{bought.json()['id']}").status_code == 200
+    assert _cash_value(client, pid) == 1100
+    assert client.delete(f"/api/transactions/{sold['id']}").status_code == 200
+    assert _cash_value(client, pid) is None
+
+
+def test_changing_cash_action_to_other_recalculates_balance(client):
+    pid = _platform(client)
+    _txn(client, platform_id=pid, action='cash_adjust', date='2026-01-01', currency='USD', amount=1000)
+    deposit = _txn(client, platform_id=pid, action='deposit', date='2026-01-02', currency='USD', amount=500).json()
+    assert client.put(f"/api/transactions/{deposit['id']}", json={'action': 'other'}).status_code == 200
+    assert _cash_value(client, pid) == 1000
+
+
+def test_startup_rebuilds_historical_sale_cash_idempotently(client, session, monkeypatch):
+    import database
+    pid = _platform(client)
+    user_id = session.exec(select(Platform)).first().user_id
+    session.add(Transaction(user_id=user_id, platform_id=pid, action='sell',
+                            date='2026-01-01', currency='USD', quantity=10, price=100, fee=5))
+    session.commit()
+    monkeypatch.setattr(database, 'engine', session.bind)
+    database.init_db()
+    database.init_db()
+    assert _cash_value(client, pid) == 995
+    cash = [h for h in client.get('/api/holdings').json() if h['asset_type'] == 'cash']
+    assert len(cash) == 1
+
+
+def test_old_backup_without_cash_holding_rebuilds_sale_proceeds(client):
+    pid = _platform(client)
+    _txn(client, platform_id=pid, symbol='AAPL', currency='USD',
+         action='adjust', date='2026-01-01', quantity=10, price=100)
+    _txn(client, platform_id=pid, symbol='AAPL', currency='USD',
+         action='sell', date='2026-01-02', quantity=10, price=120)
+    backup = client.get('/api/backup').json()
+    backup['holdings'] = [h for h in backup['holdings'] if h['asset_type'] != 'cash']
+    assert client.post('/api/backup/import', json=backup).status_code == 200
+    restored = client.get('/api/cash').json()[0]
+    assert _cash_value(client, restored['platform_id']) == 1200
+
+
+@pytest.mark.parametrize('existing_anchor', [False, True])
+def test_legacy_deficits_allow_calibration_and_future_trades(client, session, user, existing_anchor):
+    from cash_service import rebuild_sale_cash
+    pid = _platform(client)
+    base = dict(user_id=user.id, platform_id=pid, symbol='AAPL', currency='USD', quantity=1)
+    session.add(Transaction(**base, action='sell', date='2026-01-01', price=100))
+    session.add(Transaction(**base, action='buy', date='2026-01-02', price=200))
+    if existing_anchor:
+        session.add(Transaction(user_id=user.id, platform_id=pid, currency='USD',
+                                action='cash_adjust', date='2026-02-01', amount=1000))
+    session.commit()
+    rebuild_sale_cash(session, user.id)
+    session.commit()
+    if not existing_anchor:
+        calibrated = _txn(client, platform_id=pid, currency='USD', action='cash_adjust',
+                          date='2026-02-01', amount=1000)
+        assert calibrated.status_code == 200, calibrated.text
+    bought = _txn(client, platform_id=pid, symbol='MSFT', currency='USD', action='buy',
+                  date='2026-03-01', quantity=1, price=10)
+    assert bought.status_code == 200, bought.text
+    assert _cash_value(client, pid) == 990
+    # A new deficit in historical or current cash must still be rejected.
+    for date, amount in [('2026-01-03', 1), ('2026-03-02', 2000)]:
+        assert _txn(client, platform_id=pid, currency='USD', action='withdraw',
+                    date=date, amount=amount).status_code == 400
+
+
+def test_legacy_deficit_edits_and_deletes_cannot_worsen_history(client, session, user):
+    pid = _platform(client)
+    base = dict(user_id=user.id, platform_id=pid, currency='USD')
+    deposit = Transaction(**base, action='deposit', date='2026-01-01', amount=50)
+    other_deposit = Transaction(**base, action='deposit', date='2026-01-01', amount=50)
+    bought = Transaction(**base, symbol='AAPL', action='buy', date='2026-01-02', quantity=1, price=200)
+    anchor = Transaction(**base, action='cash_adjust', date='2026-02-01', amount=1000)
+    session.add_all([deposit, other_deposit, bought, anchor])
+    session.commit()
+    improved = client.put(f'/api/transactions/{bought.id}', json={'price': 190})
+    assert improved.status_code == 200, improved.text
+    assert client.put(f'/api/transactions/{bought.id}', json={'price': 210}).status_code == 400
+    assert client.put(f'/api/transactions/{bought.id}', json={'date': '2026-01-03'}).status_code == 400
+    assert client.delete(f'/api/transactions/{deposit.id}').status_code == 400
+    # Removing an unrelated later positive cash record must not be blocked by old deficits.
+    added = _txn(client, platform_id=pid, currency='USD', action='deposit', date='2026-03-01', amount=10)
+    assert added.status_code == 200
+    assert client.delete(f"/api/transactions/{added.json()['id']}").status_code == 200
+    assert _cash_value(client, pid) == 1000
+
+
 # ── 未初始化 / 锚定规则 ──────────────────────────────────────────────────────
 
 def test_buy_before_init_is_not_fabricated_as_cash(client):

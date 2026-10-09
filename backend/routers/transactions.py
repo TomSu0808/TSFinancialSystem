@@ -110,7 +110,7 @@ def _sync_txn_holding(session: Session, txn: Transaction, user: User) -> None:
             txn.holding_id = None
             session.add(txn)
             session.flush()
-    # 现金相关动作统一重算现金（buy/sell 仅在有显式现金记录后才会计入，见 cash_service）
+    # 卖出自动进入现金账本；现金相关动作统一重算。
     if txn.action in CASH_ACTIONS and txn.platform_id is not None and txn.currency is not None:
         recalc_cash(session, user, txn.platform_id, txn.currency)
     for hid in affected:
@@ -450,6 +450,8 @@ def update_transaction(
     txn = _owned(session, txn_id, user)
     old_platform_id = txn.platform_id
     old_currency = txn.currency
+    old_action = txn.action
+    previous_txn = txn.model_copy()
     values = data.model_dump(exclude_unset=True)
     values.pop("holding_id", None)  # holding_id is system-managed; ignore client input
     if "platform_id" in values:
@@ -473,14 +475,15 @@ def update_transaction(
         exclude_txn_id=txn_id,
     )
     _check_oversell(session, user, txn, exclude_txn_id=txn_id)  # 禁止超卖
-    check_cash(session, user, txn, exclude_txn_id=txn_id)  # 新账户现金时间线校验
+    check_cash(session, user, txn, exclude_txn_id=txn_id, previous_txn=previous_txn)
     prepare_position(session, user, txn)
     session.add(txn)
     session.flush()
     _sync_txn_holding(session, txn, user)
-    # 改了平台/币种时，旧现金账户也要重算并做时间线校验（交易从旧账户移出）
-    if (txn.action in CASH_ACTIONS
-            and (old_platform_id, old_currency) != (txn.platform_id, txn.currency)
+    # 移出旧现金账户或改成非现金动作时，撤销旧现金影响并验证余额。
+    if (old_action in CASH_ACTIONS
+            and ((old_platform_id, old_currency) != (txn.platform_id, txn.currency)
+                 or txn.action not in CASH_ACTIONS)
             and old_platform_id is not None and old_currency is not None):
         with session.no_autoflush:
             old_cash_txns = session.exec(select(Transaction).where(
@@ -490,7 +493,7 @@ def update_transaction(
                 Transaction.action.in_(CASH_ACTIONS),
                 Transaction.id != txn_id,
             )).all()
-        replay_cash(old_cash_txns, check_negative=True)
+        replay_cash(old_cash_txns, check_negative=True, previous_txns=[*old_cash_txns, previous_txn])
         recalc_cash(session, user, old_platform_id, old_currency)
     session.commit()
     session.refresh(txn)
@@ -523,7 +526,7 @@ def delete_transaction(
                 Transaction.action.in_(CASH_ACTIONS),
                 Transaction.id != txn_id,
             )).all()
-        replay_cash(remaining_cash, check_negative=True)
+        replay_cash(remaining_cash, check_negative=True, previous_txns=[*remaining_cash, txn])
     session.delete(txn)
     session.flush()
     if holding_id is not None:

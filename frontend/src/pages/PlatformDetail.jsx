@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
-  Button, Card, Col, DatePicker, Drawer, Empty, Form, Input, InputNumber, Modal, Popconfirm, Row,
+  Button, Card, Col, Collapse, DatePicker, Drawer, Empty, Form, Grid, Input, InputNumber, Modal, Popconfirm, Row,
   Segmented, Select, Space, Spin, Switch, Table, Tag, Tooltip, Typography, message,
 } from 'antd'
 import { BookOutlined, PlusOutlined, ReloadOutlined, ArrowLeftOutlined, LinkOutlined, WarningOutlined } from '@ant-design/icons'
@@ -28,9 +28,11 @@ const NOTE_TYPE_COLOR = {
 }
 
 export default function PlatformDetail() {
+  const screens = Grid.useBreakpoint()
+  const isMobile = !screens.md
   const navigate = useNavigate()
   const { upColor, downColor } = useColorScheme()
-  const { displayCurrency } = useDisplaySettings()
+  const { displayCurrency, setDisplayCurrency } = useDisplaySettings()
   const { id } = useParams()
   const platformId = Number(id)
   const [platform, setPlatform] = useState(null)
@@ -40,6 +42,7 @@ export default function PlatformDetail() {
   const [refreshing, setRefreshing] = useState(false)
   const [showClosed, setShowClosed] = useState(false)
   const [open, setOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState(null)
   const [mode, setMode] = useState('derived')
   const [form] = Form.useForm()
@@ -70,6 +73,18 @@ export default function PlatformDetail() {
       ? { value: result, sym: CURRENCY_SYMBOL[displayCurrency] || '' }
       : { value: amount, sym: CURRENCY_SYMBOL[srcCur] || '' }
   }
+  const accountTotals = useMemo(() => {
+    let invested = 0
+    let cash = 0
+    let complete = true
+    for (const holding of data) {
+      const value = convertAmount(marketValue(holding), holding.currency, displayCurrency, rate)
+      if (value == null) { complete = false; continue }
+      if (holding.asset_type === 'cash') cash += value
+      else invested += value
+    }
+    return { invested, cash, total: invested + cash, complete }
+  }, [data, displayCurrency, rate])
 
   const load = async () => {
     setLoading(true)
@@ -124,6 +139,7 @@ export default function PlatformDetail() {
 
   const submit = async () => {
     const values = await form.validateFields()
+    setSaving(true)
     try {
       if (editing) {
         // 编辑：derived 持仓只改可改字段；数量/成本由流水决定
@@ -147,6 +163,8 @@ export default function PlatformDetail() {
       load()
     } catch (e) {
       message.error('保存失败：' + (e.response?.data?.detail || e.message))
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -244,21 +262,29 @@ export default function PlatformDetail() {
   const cashColumns = [
     { title: '币种', dataIndex: 'currency', width: 90, render: (v) => <Tag>{v}</Tag> },
     {
-      title: '现金余额', dataIndex: 'balance', align: 'right',
+      title: '现金余额（原币）', dataIndex: 'balance', align: 'right',
       render: (v, r) => r.initialized
         ? `${CURRENCY_SYMBOL[r.currency] || ''}${fmt(v)}`
         : <Tag color="orange">未初始化</Tag>,
     },
     {
+      title: `折合 ${displayCurrency}`, align: 'right',
+      render: (_, r) => {
+        const value = convertAmount(r.balance, r.currency, displayCurrency, rate)
+        return value == null ? '—' : `${CURRENCY_SYMBOL[displayCurrency]}${fmt(value)}`
+      },
+    },
+    {
       title: '基准', dataIndex: 'last_anchor_date', width: 140,
-      render: (v, r) => (r.initialized ? (v || '—') : '请先初始化'),
+      render: (v, r) => r.balance < 0 ? <Tag color="red">流水不完整，请校准</Tag>
+        : (r.initialized ? (v || '按已录流水累计') : '可校准已有现金'),
     },
     {
       title: '操作', width: 220,
       render: (_, r) => (
         <Space size={4}>
           <a onClick={() => openCashEntry('deposit', r.currency)}>入金</a>
-          <a onClick={() => openCashEntry('withdraw', r.currency)}>出金</a>
+          <a onClick={() => openCashEntry('withdraw', r.currency)}>提现/出金</a>
           <a onClick={() => openCashEntry('cash_adjust', r.currency)}>校准</a>
           <a onClick={() => openLedger(r.currency)}>流水</a>
         </Space>
@@ -406,6 +432,19 @@ export default function PlatformDetail() {
     },
   ], [upColor, downColor, displayCurrency, rate]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const accountControls = (
+        <div className={isMobile ? 'mobile-toolbar' : 'desktop-toolbar'}>
+          <Segmented aria-label="账户展示币种" value={displayCurrency} onChange={setDisplayCurrency}
+            options={[{ value: 'CNY', label: '人民币 ¥' }, { value: 'USD', label: '美元 $' }]} />
+          <Space className="closed-toggle" size={4}>
+            <span style={{ color: '#888', fontSize: 13 }}>显示已清仓</span>
+            <Switch size="small" checked={showClosed} onChange={setShowClosed} />
+          </Space>
+          <Button icon={<ReloadOutlined />} loading={refreshing} onClick={doRefresh}>更新行情</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加资产</Button>
+        </div>
+  )
+
   return (
     <Card
       title={
@@ -414,34 +453,104 @@ export default function PlatformDetail() {
           {platform ? platform.name : '平台'} · 资产管理
         </Space>
       }
-      extra={
-        <Space wrap size={[8, 6]}>
-          <Space size={4}>
-            <span style={{ color: '#888', fontSize: 13 }}>显示已清仓</span>
-            <Switch size="small" checked={showClosed} onChange={setShowClosed} />
-          </Space>
-          <Button icon={<ReloadOutlined />} loading={refreshing} onClick={doRefresh}>更新行情</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加资产</Button>
-        </Space>
-      }
+      extra={screens.lg ? accountControls : null}
     >
-      <Table rowKey="id" loading={loading} dataSource={data} columns={columns} pagination={false} scroll={{ x: 860 }}
-        rowClassName={(r) => (isClosed(r) ? 'row-closed' : '')} />
+      {!screens.lg && <div style={{ marginBottom: 16 }}>{accountControls}</div>}
+      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+        {[['账户总资产', 'total'], ['持仓市值', 'invested'], ['账户现金', 'cash']].map(([label, key]) => (
+          <Col xs={key === 'total' ? 24 : 12} sm={8} key={key}>
+            <Card size="small">
+              <Typography.Text type="secondary">{label}（{displayCurrency}）</Typography.Text>
+              <div className="account-total-value" style={{ fontSize: 22 }}>{accountTotals.complete
+                ? `${CURRENCY_SYMBOL[displayCurrency]}${fmt(accountTotals[key])}` : '汇率待更新'}</div>
+            </Card>
+          </Col>
+        ))}
+      </Row>
+      {isMobile ? (
+        <Spin spinning={loading}>
+          <div className="mobile-record-list" aria-label="持仓列表">
+            {data.filter((r) => r.asset_type !== 'cash').map((r) => (
+              <Card key={r.id} size="small" className={isClosed(r) ? 'row-closed' : ''}>
+                <div className="mobile-record-header">
+                  <div>
+                    <div className="mobile-record-name">{r.name || r.symbol || '未命名资产'}</div>
+                    <div className="mobile-record-meta">{[r.symbol, MARKET_LABEL[r.market], r.currency].filter(Boolean).join(' · ')}</div>
+                    {isClosed(r) && <Tag>已清仓</Tag>}
+                    {isAnomalous(r) && <Tag color="red">持仓数量异常</Tag>}
+                  </div>
+                  <div>
+                    <span className="mobile-record-label">市值</span>
+                    <div className="mobile-record-value">{columns.find((c) => c.title === '市值').render(null, r)}</div>
+                  </div>
+                </div>
+                <div className="mobile-record-grid">
+                  {columns.filter((c) => ['数量', '现价', '今日涨跌', '盈亏'].includes(c.title)).map((c) => (
+                    <div key={c.title}><span className="mobile-record-label">{c.title}</span>{c.render(r[c.dataIndex], r)}</div>
+                  ))}
+                </div>
+                <Collapse ghost items={[{ key: 'details', label: '成本、已实现收益与操作', children: (
+                  <>
+                    <div className="mobile-record-grid">
+                      {columns.filter((c) => ['类型', '成本', '已实现'].includes(c.title)).map((c) => (
+                        <div key={c.title}><span className="mobile-record-label">{c.title}</span>{c.render(r[c.dataIndex], r)}</div>
+                      ))}
+                    </div>
+                    <div className="mobile-record-actions">{columns.at(-1).render(null, r)}</div>
+                  </>
+                ) }]} />
+              </Card>
+            ))}
+            {!loading && !data.some((r) => r.asset_type !== 'cash') && <Empty description="暂无持仓，可添加资产或记录买入" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
+          </div>
+        </Spin>
+      ) : (
+        <Table rowKey="id" loading={loading} dataSource={data} columns={columns} pagination={false} scroll={{ x: 860 }}
+          rowClassName={(r) => (isClosed(r) ? 'row-closed' : '')} />
+      )}
 
       {/* 现金账户 */}
       <Card size="small" title="现金账户" style={{ marginTop: 16 }}
-        extra={
+        extra={!isMobile && (
           <Space size={4}>
             <Button size="small" onClick={() => openCashEntry('cash_adjust')}>初始化/校准</Button>
             <Button size="small" type="primary" onClick={() => openCashEntry('deposit')}>入金</Button>
-            <Button size="small" onClick={() => openCashEntry('withdraw')}>出金</Button>
+            <Button size="small" onClick={() => openCashEntry('withdraw')}>提现/出金</Button>
           </Space>
-        }
+        )}
       >
+        {isMobile && <div className="mobile-toolbar">
+          <Button onClick={() => openCashEntry('cash_adjust')}>初始化/校准</Button>
+          <Button type="primary" onClick={() => openCashEntry('deposit')}>入金</Button>
+          <Button onClick={() => openCashEntry('withdraw')}>提现/出金</Button>
+        </div>}
+        <Typography.Paragraph type="secondary">
+          卖出所得扣除手续费后自动留在本账户现金中，可继续买入；提现/出金才会减少账户内资金。
+          总资产 = 持仓市值 + 现金。已有但未录入的闲置现金，请用「初始化/校准」补齐。
+        </Typography.Paragraph>
         {cashAccounts.length === 0 ? (
-          <Empty description="该账户暂无现金记录（买卖、分红等需先有现金基准）" image={Empty.PRESENTED_IMAGE_SIMPLE}>
+          <Empty description="暂无现金流水；首笔卖出会自动记入现金" image={Empty.PRESENTED_IMAGE_SIMPLE}>
             <Button type="primary" onClick={() => openCashEntry('cash_adjust')}>初始化现金余额</Button>
           </Empty>
+        ) : isMobile ? (
+          <div className="mobile-record-list" aria-label="现金账户列表">
+            {cashAccounts.map((r) => (
+              <Card key={r.currency} size="small">
+                <div className="mobile-record-header">
+                  <div><Tag>{r.currency}</Tag><div className="mobile-record-meta">现金余额（原币）</div></div>
+                  <div className="mobile-record-value">{r.initialized ? `${CURRENCY_SYMBOL[r.currency] || ''}${fmt(r.balance)}` : '未初始化'}</div>
+                </div>
+                <div className="mobile-record-meta">折合 {displayCurrency}：{cashColumns[2].render(null, r)}</div>
+                {r.balance < 0 && <Tag color="red">流水不完整，请校准</Tag>}
+                <div className="mobile-record-actions">
+                  <Button onClick={() => openCashEntry('deposit', r.currency)}>入金</Button>
+                  <Button onClick={() => openCashEntry('withdraw', r.currency)}>提现</Button>
+                  <Button onClick={() => openCashEntry('cash_adjust', r.currency)}>校准</Button>
+                  <Button onClick={() => openLedger(r.currency)}>流水</Button>
+                </div>
+              </Card>
+            ))}
+          </div>
         ) : (
           <Table rowKey={(r) => `${r.platform_id}-${r.currency}`} dataSource={cashAccounts} pagination={false} size="small" columns={cashColumns} />
         )}
@@ -449,7 +558,7 @@ export default function PlatformDetail() {
 
       {/* 现金入金/出金/校准 Modal */}
       <Modal
-        title={cashEntryAction === 'cash_adjust' ? '初始化/校准现金' : cashEntryAction === 'deposit' ? '入金' : '出金'}
+        title={cashEntryAction === 'cash_adjust' ? '初始化/校准现金' : cashEntryAction === 'deposit' ? '入金' : '提现/出金'}
         open={cashEntryOpen}
         onOk={submitCashEntry}
         confirmLoading={cashEntrySaving}
@@ -459,7 +568,7 @@ export default function PlatformDetail() {
         <Typography.Paragraph type="secondary">
           {cashEntryAction === 'cash_adjust'
             ? '金额填写该时点的现金绝对余额（不是增减量），用于建立/修正现金基准；同一币种只需初始化一次。'
-            : cashEntryAction === 'deposit' ? '记录一笔资金转入该账户。' : '记录一笔资金转出该账户。'}
+            : cashEntryAction === 'deposit' ? '记录一笔资金转入该账户。' : '资金实际转出账户时才记录提现/出金，将扣减现金和本账户总资产。卖出股票无需再记录出金。'}
         </Typography.Paragraph>
         <Form form={cashForm} layout="vertical">
           <Form.Item name="currency" label="币种" rules={[{ required: true }]}>
@@ -482,7 +591,7 @@ export default function PlatformDetail() {
         title={`现金流水 · ${ledgerData?.currency || ''}`}
         open={ledgerOpen}
         onClose={() => setLedgerOpen(false)}
-        width={480}
+        width={isMobile ? '100%' : 480}
       >
         {ledgerLoading ? (
           <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
@@ -492,10 +601,19 @@ export default function PlatformDetail() {
               {ledgerData.initialized ? (
                 <div>当前余额 <b style={{ fontSize: 16 }}>{fmt(ledgerData.balance)} {CURRENCY_SYMBOL[ledgerData.currency] || ''}</b></div>
               ) : (
-                <Tag color="orange">未初始化（首条现金校准前，买卖不计入现金）</Tag>
+                <Tag color="orange">尚无现金收入；卖出将自动入账，也可校准已有现金</Tag>
               )}
             </div>
-            <Table rowKey="id" dataSource={ledgerData.entries} pagination={false} size="small" columns={ledgerColumns} />
+            {isMobile ? <div className="mobile-record-list">
+              {ledgerData.entries.map((r) => <Card key={r.id} size="small">
+                <div className="mobile-record-header"><span>{r.date}</span><Tag>{TXN_ACTION_LABEL[r.action] || r.action}</Tag></div>
+                <div className="mobile-record-grid">
+                  <div><span className="mobile-record-label">变动</span>{ledgerColumns[2].render(r.flow)}</div>
+                  <div><span className="mobile-record-label">余额</span>{ledgerColumns[3].render(r.balance)}</div>
+                </div>
+                {r.note && <div className="mobile-record-meta">{r.note}</div>}
+              </Card>)}
+            </div> : <Table rowKey="id" dataSource={ledgerData.entries} pagination={false} size="small" columns={ledgerColumns} />}
           </>
         ) : null}
       </Drawer>
@@ -607,6 +725,8 @@ export default function PlatformDetail() {
         title={editing ? '编辑资产' : '添加资产'}
         open={open}
         onOk={submit}
+        confirmLoading={saving}
+        okText={saving ? '保存并更新行情中' : '保存'}
         onCancel={() => setOpen(false)}
         destroyOnHidden
       >

@@ -264,7 +264,10 @@ def test_csv_commit_buy_sell_syncs_correctly(client):
                     files={"file": ("t.csv", csv_content, "text/csv")})
     assert r.status_code == 200
     holdings = client.get("/api/holdings?include_closed=true").json()
-    derived = [h for h in holdings if h["source"] == "derived"]
+    derived = [h for h in holdings if h["source"] == "derived" and h['asset_type'] != 'cash']
+    cash = [h for h in holdings if h['asset_type'] == 'cash']
+    assert len(cash) == 1
+    assert cash[0]['manual_value'] == 750
     assert len(derived) == 1
     assert derived[0]["quantity"] == 50
     # realized pnl = 50*(15-10) = 250

@@ -101,10 +101,9 @@ def _upsert_snapshot(session: Session, user_id: int) -> bool:
 
 @serialized_refresh
 def run_all_users_job(session: Session, triggered_by: str = "scheduler") -> AutomationRun:
-    """全量任务：刷新汇率 + 刷新所有用户行情 + 保存快照 + 评估提醒。
+    """全量任务：刷新汇率 + 刷新所有用户行情 + 保存快照。
     单用户失败不中断其他用户。返回 AutomationRun 记录。
     """
-    from config import ALERTS_ENABLED
 
     run = AutomationRun(
         job_name="daily_refresh",
@@ -137,12 +136,6 @@ def run_all_users_job(session: Session, triggered_by: str = "scheduler") -> Auto
                 h_updated += hu
                 _upsert_snapshot(session, user.id)
                 snaps_saved += 1
-                if ALERTS_ENABLED:
-                    try:
-                        from alert_service import evaluate_alerts_for_user
-                        evaluate_alerts_for_user(session, user.id)
-                    except Exception as ae:  # noqa: BLE001
-                        logger.warning("提醒评估失败 user=%s: %s", user.id, ae)
                 succeeded += 1
             except Exception as exc:  # noqa: BLE001
                 session.rollback()
@@ -172,8 +165,7 @@ def run_all_users_job(session: Session, triggered_by: str = "scheduler") -> Auto
 
 @serialized_refresh
 def run_single_user_job(session: Session, user_id: int, triggered_by: str = "manual") -> AutomationRun:
-    """单用户手动触发刷新：行情 + 快照 + 提醒评估。"""
-    from config import ALERTS_ENABLED
+    """单用户手动触发刷新：行情 + 快照。"""
 
     run = AutomationRun(
         job_name="daily_refresh",
@@ -198,12 +190,6 @@ def run_single_user_job(session: Session, user_id: int, triggered_by: str = "man
         _upsert_snapshot(session, user_id)
         run.snapshots_saved = 1
 
-        if ALERTS_ENABLED:
-            try:
-                from alert_service import evaluate_alerts_for_user
-                evaluate_alerts_for_user(session, user_id)
-            except Exception as ae:  # noqa: BLE001
-                logger.warning("提醒评估失败: %s", ae)
 
         run.users_succeeded = 1
         run.status = "success" if fx_ok and ht == hu else "partial_failed"

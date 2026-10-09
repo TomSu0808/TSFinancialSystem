@@ -6,13 +6,13 @@ import {
 import {
   ReloadOutlined, ArrowUpOutlined, ArrowDownOutlined,
   EditOutlined, InfoCircleOutlined, ExclamationCircleOutlined,
-  CheckCircleOutlined, RightOutlined, WarningOutlined, BellOutlined,
+  CheckCircleOutlined, RightOutlined, WarningOutlined,
   ThunderboltOutlined, PlusOutlined, UploadOutlined, RobotOutlined, CalendarOutlined,
 } from '@ant-design/icons'
 
 const { Title, Text } = Typography
 import ReactECharts from 'echarts-for-react'
-import { getSummary, getSnapshots, refreshPrices, refreshRate, getAutomationStatus, runNow, listAlertEvents, getPortfolioSummary, getStoredUser, ensureLoginRefresh } from '../api'
+import { getSummary, getSnapshots, refreshPrices, refreshRate, getAutomationStatus, runNow, getPortfolioSummary, getStoredUser, ensureLoginRefresh } from '../api'
 import { CURRENCY_SYMBOL, CURRENCY_LABEL, ASSET_TYPE_LABEL, fmt, isMasked } from '../constants'
 import { useColorScheme } from '../colorScheme.jsx'
 import DailyPnlDrawer from '../components/DailyPnlDrawer.jsx'
@@ -40,7 +40,6 @@ export default function Dashboard({ autoRefresh = false }) {
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [automationStatus, setAutomationStatus] = useState(null)
-  const [unreadAlerts, setUnreadAlerts] = useState([])
   const [runningNow, setRunningNow] = useState(false)
   const RANGE_OPTIONS = [
     { value: 'max', label: '最大' },
@@ -90,7 +89,6 @@ export default function Dashboard({ autoRefresh = false }) {
     }
     await loadSnapshots(snapRangeRef.current)       // 快照必须在 summary 之后读取
     getAutomationStatus().then(setAutomationStatus).catch(() => {})
-    listAlertEvents({ status: 'unread', limit: 3 }).then(setUnreadAlerts).catch(() => {})
     getPortfolioSummary().then(setPortfolioSummary).catch(() => {})
   }, [displayCurrency, loadSnapshots])
 
@@ -256,7 +254,7 @@ export default function Dashboard({ autoRefresh = false }) {
       {loginRefreshing && <Alert type="info" showIcon message="正在自动更新行情、汇率和盈亏…" />}
       {loginRefreshError && <Alert type="warning" showIcon message={loginRefreshError} action={<Button size="small" loading={refreshing} onClick={doRefresh}>重试更新</Button>} />}
       {/* 页面标题与说明 */}
-      <div style={{ marginBottom: -8 }}>
+      <div className="dashboard-intro" style={{ marginBottom: -8 }}>
         <Title level={3} style={{ marginTop: 0, marginBottom: 4, fontWeight: 700 }}>
           投资总览
         </Title>
@@ -264,7 +262,7 @@ export default function Dashboard({ autoRefresh = false }) {
           统一查看账户、持仓、收益、现金和 AI 投研状态
         </Text>
         {/* CTA 操作按钮 */}
-        <Space size={8} wrap style={{ marginTop: 16 }}>
+        <Space className="dashboard-intro-actions" size={8} wrap style={{ marginTop: 16 }}>
           <Button
             type="default"
             icon={<PlusOutlined />}
@@ -302,7 +300,7 @@ export default function Dashboard({ autoRefresh = false }) {
             <div style={{ color: '#8c8c8c', marginBottom: 8, fontSize: 13, fontWeight: 500 }}>
               总资产（{CURRENCY_LABEL[displayCurrency]}）
             </div>
-            <div style={{ fontSize: 44, fontWeight: 800, lineHeight: 1.05 }}>
+            <div className="dashboard-total" style={{ fontSize: 44, fontWeight: 800, lineHeight: 1.05 }}>
               {sym}{fmt(total)}
             </div>
             <Space size={18} wrap style={{ marginTop: 16 }}>
@@ -617,32 +615,6 @@ export default function Dashboard({ autoRefresh = false }) {
         </Card>
       )}
 
-      {/* 提醒摘要 */}
-      {unreadAlerts.length > 0 && (
-        <Card
-          size="small"
-          title={
-            <Space size={6}>
-              <BellOutlined style={{ color: '#faad14' }} />
-              <span>未读提醒</span>
-              <Tag color="orange">{unreadAlerts.length} 条</Tag>
-            </Space>
-          }
-          extra={<Link to="/alerts" style={{ fontSize: 12 }}>查看全部 &rsaquo;</Link>}
-        >
-          <Space direction="vertical" style={{ display: 'flex' }} size={6}>
-            {unreadAlerts.map((ev) => (
-              <div key={ev.id} style={{ display: 'flex', gap: 8, fontSize: 13 }}>
-                <ExclamationCircleOutlined style={{ color: '#faad14', marginTop: 2, flexShrink: 0 }} />
-                <div>
-                  <span style={{ fontWeight: 500 }}>{ev.title}</span>
-                  <span style={{ color: '#8c8c8c', marginLeft: 8 }}>{ev.message}</span>
-                </div>
-              </div>
-            ))}
-          </Space>
-        </Card>
-      )}
 
       {portfolioSummary?.latest_task && portfolioSummary.latest_task.status !== 'completed' && (
         <Alert showIcon type={portfolioSummary.latest_task.status === 'failed' ? 'warning' : 'info'}

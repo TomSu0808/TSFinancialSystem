@@ -180,6 +180,16 @@ def init_db() -> None:
             conn.execute(text("ALTER TYPE txnaction ADD VALUE IF NOT EXISTS 'adjust'"))
             conn.execute(text("ALTER TYPE txnaction ADD VALUE IF NOT EXISTS 'cash_adjust'"))
     _migrate_add_user_id()  # 兼容 SQLite 和 PostgreSQL
+    # 提醒功能已移除；解除旧记录对持仓的引用，避免阻止删除持仓或恢复备份。
+    # 仅处理旧表，不再创建提醒表，保留历史提醒文本。
+    with engine.begin() as conn:
+        for table in ('alertevent', 'alertrule'):
+            if _table_exists(conn, table) and _column_exists(conn, table, 'holding_id'):
+                conn.execute(text(f'UPDATE "{table}" SET holding_id = NULL WHERE holding_id IS NOT NULL'))
+    from cash_service import rebuild_sale_cash
+    with Session(engine) as session:
+        rebuild_sale_cash(session)
+        session.commit()
 
 
 def get_session():

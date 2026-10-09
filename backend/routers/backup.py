@@ -190,6 +190,8 @@ def import_backup(
     from position import recompute_holding
     for hid in hold_map.values():
         recompute_holding(session, hid)
+    from cash_service import rebuild_sale_cash
+    rebuild_sale_cash(session, user.id)
 
     # 7) 重建投研报告（provider_response_id 不恢复，相关联 holding 不重映射）
     for r in data.research_reports:

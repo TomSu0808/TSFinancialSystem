@@ -24,4 +24,12 @@ frontend/dist
 # 杂项（截图、本地工具产物、文档）
 *.png
 .playwright-mcp
+.venv-calibration
+.claude
+.codegraph
+.mcp.json
+.superpowers
+.dev-server-pids.json
+.env
+**/.env
 ._*

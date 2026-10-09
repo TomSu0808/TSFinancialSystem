@@ -8,16 +8,15 @@ import {
   UserOutlined, LogoutOutlined, DownloadOutlined, UploadOutlined,
   EyeOutlined, EyeInvisibleOutlined, BulbOutlined, SyncOutlined,
   FundOutlined, MailOutlined, QuestionCircleOutlined, KeyOutlined, DeleteOutlined,
-  MenuOutlined, BellOutlined,
+  MenuOutlined,
 } from '@ant-design/icons'
-import { Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import Dashboard from './pages/Dashboard.jsx'
 import Platforms from './pages/Platforms.jsx'
 import PlatformDetail from './pages/PlatformDetail.jsx'
 import Notes from './pages/Notes.jsx'
 import Research from './pages/Research.jsx'
 import Transactions from './pages/Transactions.jsx'
-import Alerts from './pages/Alerts.jsx'
 import Login from './pages/Login.jsx'
 import {
   getStoredUser, getToken, logout, exportBackup, importBackup, ensureLoginRefresh,
@@ -27,6 +26,7 @@ import {
 import { setMask } from './constants'
 import { ColorSchemeContext } from './colorScheme.jsx'
 import { DisplaySettingsContext } from './displaySettings.jsx'
+import './responsive.css'
 
 const { Header, Content } = Layout
 const { Title, Text } = Typography
@@ -125,6 +125,12 @@ export default function App() {
     const onLogout = () => setUser(null)
     window.addEventListener('auth:logout', onLogout)
     return () => window.removeEventListener('auth:logout', onLogout)
+  }, [])
+
+  useEffect(() => {
+    const onRefreshFailure = () => message.warning('交易变更已保存，部分行情暂未更新，当前仍显示上次价格。')
+    window.addEventListener('quotes:refresh-failed', onRefreshFailure)
+    return () => window.removeEventListener('quotes:refresh-failed', onRefreshFailure)
   }, [])
 
   // 已登录时处理 /verify-email?token=... 链接
@@ -368,9 +374,7 @@ export default function App() {
         ? '/notes'
         : location.pathname.startsWith('/research')
           ? '/research'
-          : location.pathname.startsWith('/alerts')
-            ? '/alerts'
-            : '/'
+          : '/'
 
   const navItems = [
     { key: '/', icon: <DashboardOutlined />, label: <Link to="/">投资总览</Link> },
@@ -378,7 +382,6 @@ export default function App() {
     { key: '/transactions', icon: <SwapOutlined />, label: <Link to="/transactions">交易流水</Link> },
     { key: '/research', icon: <FundOutlined />, label: <Link to="/research">AI 投研</Link> },
     { key: '/notes', icon: <ReadOutlined />, label: <Link to="/notes">投资笔记</Link> },
-    { key: '/alerts', icon: <BellOutlined />, label: <Link to="/alerts">提醒</Link> },
   ]
 
   const userMenu = {
@@ -426,14 +429,15 @@ export default function App() {
 
   return (
     <ConfigProvider theme={{ algorithm }}>
-      <Layout style={{ minHeight: '100vh' }}>
+      <Layout style={{ minHeight: '100vh', '--mobile-surface': dark ? '#141414' : '#fff', '--mobile-border': dark ? '#303030' : '#f0f0f0', '--mobile-muted': dark ? '#a6a6a6' : '#8c8c8c' }}>
         <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={onPickFile} />
 
-        <Header style={{ display: 'flex', alignItems: 'center', paddingInline: 16, gap: 8 }}>
+        <Header className="app-header" style={{ display: 'flex', alignItems: 'center', paddingInline: 16, gap: 8 }}>
           {isMobile && (
             <Button
               type="text"
               icon={<MenuOutlined />}
+              aria-label="打开导航"
               style={{ color: '#fff', flexShrink: 0 }}
               onClick={() => setMobileNavOpen(true)}
             />
@@ -444,11 +448,11 @@ export default function App() {
           {!isMobile && (
             <Menu theme="dark" mode="horizontal" selectedKeys={[selected]} items={navItems} style={{ flex: 1, minWidth: 0 }} />
           )}
-          <Dropdown menu={userMenu}>
-            <Space style={{ color: '#fff', cursor: 'pointer', flexShrink: 0 }}>
+          <Dropdown menu={userMenu} trigger={['click']}>
+            <button className="profile-trigger" aria-label="打开个人设置">
               <Avatar size="small" icon={<UserOutlined />} />
               {!isMobile && user.username}
-            </Space>
+            </button>
           </Dropdown>
         </Header>
 
@@ -470,8 +474,8 @@ export default function App() {
           />
         </Drawer>
 
-        <Content key={privacy ? 'priv' : 'pub'} style={{ padding: '20px 16px', maxWidth: 1280, width: '100%', margin: '0 auto' }}>
-          {/* 只在有邮箱且未验证时显示提醒 */}
+        <Content className="app-content" key={privacy ? 'priv' : 'pub'} style={{ padding: '20px 16px', maxWidth: 1280, width: '100%', margin: '0 auto' }}>
+          {/* 邮箱未验证时显示验证入口 */}
           {user && user.email && !user.email_verified && (
             <Alert
               type="warning"
@@ -501,11 +505,21 @@ export default function App() {
                 <Route path="/transactions" element={<Transactions />} />
                 <Route path="/notes" element={<Notes />} />
                 <Route path="/research" element={<Research />} />
-                <Route path="/alerts" element={<Alerts />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </ColorSchemeContext.Provider>
           </DisplaySettingsContext.Provider>
         </Content>
+        {isMobile && (
+          <nav className="mobile-bottom-nav" aria-label="主要导航">
+            {navItems.map((item, index) => (
+              <Link key={item.key} to={item.key} aria-current={selected === item.key ? 'page' : undefined}>
+                {item.icon}
+                <span>{['总览', '账户', '交易', '投研', '笔记'][index]}</span>
+              </Link>
+            ))}
+          </nav>
+        )}
       </Layout>
 
       {/* 个人资料 Drawer */}

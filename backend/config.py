@@ -75,9 +75,6 @@ AUTO_REFRESH_TIMEZONE: str = os.getenv("AUTO_REFRESH_TIMEZONE", "Asia/Shanghai")
 # AUTO_REFRESH_ON_STARTUP=true 时应用启动后立即执行一次刷新任务。
 AUTO_REFRESH_ON_STARTUP: bool = os.getenv("AUTO_REFRESH_ON_STARTUP", "false").lower() == "true"
 
-# ── 提醒系统 ──────────────────────────────────────────────────────────────────
-# ALERTS_ENABLED=false 可完全关闭提醒评估逻辑（定时任务和手动评估都不会运行）。
-ALERTS_ENABLED: bool = os.getenv("ALERTS_ENABLED", "true").lower() == "true"
 
 
 def check_production_config() -> None:

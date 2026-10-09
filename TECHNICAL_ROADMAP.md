@@ -1,6 +1,6 @@
 # TSFinancialSystem 技术路线图
 
-更新时间：2026-07-05
+更新时间：2026-10-09
 
 本文档用于记录 TSFinancialSystem 的后续工程路线、优先级、验收标准和文档分工。它面向项目维护者和开发者；面向平台用户的说明应放在 `README.zh-CN.md` / `README.md`，架构细节放在 `ARCHITECTURE.md`。
 
@@ -14,6 +14,10 @@ TSFinancialSystem 当前已经从“个人资产记账工具”演进为一个�
 - CSV 导入、预览校验、去重和对账。
 - 投资决策日志、AI 投研报告和行动项跟踪。
 - BYOK、多用户隔离、隐私打码、Docker / Fly.io 部署。
+- 卖出自动转为现金、独立提现、账户详情币种切换及交易后自动刷新行情。
+- 手机底部导航、持仓/现金/交易卡片与触屏录入。
+
+价格、仓位和行情状态提醒已移除，后续路线不再规划提醒系统；定时数据刷新继续保留。
 
 后续迭代不应继续横向堆功能，而应优先提升四件事：
 
@@ -76,7 +80,7 @@ README 重构验收标准：
 | P1 | 导入 preview 校验 | 展示 valid / warning / error / duplicate | 部分完成 |
 | P1 | 导入后对账页面 | 对比券商持仓和系统回放持仓 | 部分完成 |
 | P1 | 异常交易修正入口 | 支持 ignored / corrected / manual adjustment | 待做 |
-| P1 | 现金账本完善 | 入金、出金、买卖联动现金余额 | 部分完成：入金/出金已按流水重算 |
+| P1 | 现金账本完善 | 入金、提现、买卖联动现金余额及历史校准 | 已完成：卖出无需初始化，现金按流水重算，支持历史缺口修复 |
 
 验收标准：
 
@@ -95,7 +99,6 @@ README 重构验收标准：
 | P2 | AI 报告行动项结构化 | 将 action items 转为可跟踪对象 | 已完成基础版 |
 | P2 | 持仓研究摘要 | 在持仓详情中聚合 thesis / risk / review / report | 已完成基础版 |
 | P2 | 决策日志状态流转 | active / resolved / invalidated / archived | 已完成基础版 |
-| P2 | 复盘提醒 | 对长期未处理行动项生成提醒 | 待做 |
 | P2 | 报告数据快照 | 固化报告生成时的行情、持仓和汇率上下文 | 待做 |
 | P2 | 投研质量检查清单 | 在报告中强制输出假设、反证、风险和待验证问题 | 部分完成 |
 
@@ -126,7 +129,6 @@ README 重构验收标准：
 | `models/user.py` | 用户、认证、安全问题、用户 AI Key。 |
 | `models/portfolio.py` | Platform、Holding、Transaction、Snapshot、FxRate。 |
 | `models/research.py` | ResearchReport、Note、ActionItem。 |
-| `models/alerts.py` | AlertRule、AlertEvent。 |
 | `schemas/` | API 输入输出 Schema。 |
 | `services/valuation.py` | 市值、成本、收益、币种折算。 |
 | `services/position.py` | 交易回放、持仓重算、超卖校验。 |

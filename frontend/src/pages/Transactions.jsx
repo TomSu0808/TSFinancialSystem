@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import {
-  Button, Card, Collapse, DatePicker, Drawer, Form, Input, InputNumber, Modal, Popconfirm,
-  Radio, Select, Space, Steps, Table, Tag, Upload, message,
+  Button, Card, Collapse, DatePicker, Drawer, Empty, Form, Grid, Input, InputNumber, Modal, Pagination, Popconfirm,
+  Radio, Select, Space, Spin, Steps, Table, Tag, Typography, Upload, message,
 } from 'antd'
 import { InboxOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -42,11 +42,15 @@ const CSV_TEMPLATE = [
 ].join('\n')
 
 export default function Transactions() {
+  const screens = Grid.useBreakpoint()
+  const isMobile = !screens.md
+  const [mobilePage, setMobilePage] = useState(1)
   const location = useLocation()
   const [data, setData] = useState([])
   const [platforms, setPlatforms] = useState([])
   const [loading, setLoading] = useState(false)
   const [open, setOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form] = Form.useForm()
   const selectedAction = Form.useWatch('action', form)
@@ -224,6 +228,7 @@ export default function Transactions() {
       payload.price = null
       payload.fee = null
     }
+    setSaving(true)
     try {
       if (editing) await updateTransaction(editing.id, payload)
       else await createTransaction(payload)
@@ -234,6 +239,8 @@ export default function Transactions() {
       loadRefs()
     } catch (e) {
       message.error('保存失败：' + (e.response?.data?.detail || e.message))
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -242,6 +249,7 @@ export default function Transactions() {
       await deleteTransaction(id)
       message.success('已删除')
       load()
+      loadRefs()
     } catch (e) {
       message.error('删除失败：' + e.message)
     }
@@ -478,24 +486,14 @@ export default function Transactions() {
     },
   ]
 
-  return (
-    <Card
-      title="交易记录"
-      extra={
-        <Space>
-          <Button icon={<UploadOutlined />} onClick={openImportWizard}>
-            导入交易
-          </Button>
-          <Button icon={<UploadOutlined />} onClick={() => { setCsvOpen(true); setCsvFile(null); setCsvPreview(null) }} style={{ display: 'none' }}>
-            {/* 旧版导入（隐藏，API 仍可用）*/}
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>记一笔</Button>
-        </Space>
-      }
-    >
-      {/* 筛选栏 */}
-      <Form form={filterForm} layout="inline" style={{ marginBottom: 12, rowGap: 8 }}>
-        <Form.Item name="keyword" style={{ marginBottom: 0 }}>
+  const transactionControls = <div className={isMobile ? 'mobile-toolbar' : 'desktop-toolbar'}>
+    <Button icon={<UploadOutlined />} onClick={openImportWizard}>导入交易</Button>
+    <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>记一笔</Button>
+  </div>
+
+  const filterControls = (
+      <Form className="mobile-filters" form={filterForm} layout="inline" style={{ marginBottom: 12, rowGap: 8 }}>
+        <Form.Item className="filter-wide" name="keyword" style={{ marginBottom: 0 }}>
           <Input placeholder="搜索标的、代码、备注" style={{ width: 180 }} allowClear />
         </Form.Item>
         <Form.Item name="platform_id" style={{ marginBottom: 0 }}>
@@ -512,7 +510,7 @@ export default function Transactions() {
         <Form.Item name="currency" style={{ marginBottom: 0 }}>
           <Select allowClear placeholder="币种" style={{ width: 110 }} options={CURRENCIES} />
         </Form.Item>
-        <Form.Item name="dateRange" style={{ marginBottom: 0 }}>
+        <Form.Item className="filter-wide" name="dateRange" style={{ marginBottom: 0 }}>
           <DatePicker.RangePicker style={{ width: 220 }} />
         </Form.Item>
         <Form.Item style={{ marginBottom: 0 }}>
@@ -522,12 +520,50 @@ export default function Transactions() {
           <Button onClick={resetFilters}>重置</Button>
         </Form.Item>
       </Form>
+  )
+
+  useEffect(() => { setMobilePage(1) }, [data])
+
+  return (
+    <Card title="交易记录" extra={isMobile ? null : transactionControls}>
+      {isMobile && transactionControls}
+      {isMobile ? <Collapse style={{ marginBottom: 16 }} items={[{ key: 'filters', label: '搜索与筛选', children: filterControls }]} /> : filterControls}
 
       <div style={{ marginBottom: 8, color: '#888', fontSize: 13 }}>
         共 {data.length} 条记录 · 买卖自动更新持仓；漏记买入可选择「持仓校准」，填写卖出前总数量及平均成本
       </div>
 
-      <Table
+      {isMobile ? <Spin spinning={loading}>
+        <div className="mobile-record-list" aria-label="交易列表">
+          {data.slice((mobilePage - 1) * 20, mobilePage * 20).map((r) => (
+            <Card key={r.id} size="small">
+              <div className="mobile-record-header"><span className="mobile-record-meta">{r.date}</span>{columns[1].render(r.action)}</div>
+              <div className="mobile-record-header" style={{ marginTop: 8 }}>
+                <div><div className="mobile-record-name">{r.name || r.symbol || TXN_ACTION_LABEL[r.action]}</div>
+                  <div className="mobile-record-meta">{[r.symbol, platName[r.platform_id], r.currency].filter(Boolean).join(' · ')}</div>
+                </div>
+                <div className="mobile-record-value">{columns.find((c) => c.title === '金额').render(null, r)}</div>
+              </div>
+              <Collapse ghost items={[{ key: 'details', label: '交易详情与操作', children: (
+                <>
+                  <div className="mobile-record-grid">
+                    {columns.filter((c) => ['数量', '价格', '费用'].includes(c.title)).map((c) => (
+                      <div key={c.title}><span className="mobile-record-label">{c.title}</span>{c.render(r[c.dataIndex], r)}</div>
+                    ))}
+                  </div>
+                  {r.note && <div className="mobile-record-meta">{r.note}</div>}
+                  <div className="mobile-record-actions">
+                    <Button onClick={() => openEdit(r)}>编辑</Button>
+                    <Popconfirm title="删除这条交易？" onConfirm={() => remove(r.id)}><Button danger>删除</Button></Popconfirm>
+                  </div>
+                </>
+              ) }]} />
+            </Card>
+          ))}
+          {!loading && !data.length && <Empty description="暂无交易记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
+        </div>
+        <Pagination current={mobilePage} pageSize={20} total={data.length} onChange={setMobilePage} hideOnSinglePage showSizeChanger={false} simple />
+      </Spin> : <Table
         rowKey="id"
         loading={loading}
         dataSource={data}
@@ -535,18 +571,26 @@ export default function Transactions() {
         pagination={{ pageSize: 20, hideOnSinglePage: true }}
         scroll={{ x: 1000 }}
         size="small"
-      />
+      />}
 
       {/* 记一笔 / 编辑 Modal */}
       <Modal
         title={editing ? '编辑交易' : '记一笔交易'}
         open={open}
         onOk={submit}
+        confirmLoading={saving}
+        okText={saving ? '保存并更新行情中' : '保存'}
         onCancel={() => setOpen(false)}
         destroyOnHidden
         width={560}
       >
         <Form form={form} layout="vertical">
+          {selectedAction === 'sell' && <Typography.Paragraph type="secondary">
+            卖出所得自动转为本账户同币种现金，可继续买入，不属于提现。
+          </Typography.Paragraph>}
+          {selectedAction === 'withdraw' && <Typography.Paragraph type="secondary">
+            仅在资金实际转出账户时使用，将减少现金余额和账户总资产。
+          </Typography.Paragraph>}
           {isCashAdjust && (
             <div style={{ marginBottom: 16, color: '#444', background: '#f6ffed', padding: '8px 12px', borderRadius: 6, border: '1px solid #b7eb8f', fontSize: 13, lineHeight: 1.7 }}>
               <b>现金校准/初始化</b>：金额填写该时点的<b>现金绝对余额</b>（不是增减量），用于建立该平台+币种现金的起始基准。
@@ -557,7 +601,7 @@ export default function Transactions() {
             校准数量是该时点的总持仓，并非增加数量；价格填写平均成本（可留空）。不产生现金流。
             同日按录入顺序生效；补充历史成本请编辑原校准记录。
           </div>}
-          <Space style={{ display: 'flex' }}>
+          <Space className="mobile-form-row" style={{ display: 'flex' }}>
             <Form.Item name="date" label="日期" rules={[{ required: true, message: '请选日期' }]} style={{ flex: 1 }}>
               <DatePicker style={{ width: '100%' }} />
             </Form.Item>
@@ -584,7 +628,7 @@ export default function Transactions() {
             </Form.Item>
           )}
 
-          <Space style={{ display: 'flex' }}>
+          <Space className="mobile-form-row" style={{ display: 'flex' }}>
             {showsName && (
               <Form.Item name="name" label="标的名称" style={{ flex: 1 }}>
                 <Input placeholder="如：Apple、贵州茅台" />
@@ -618,7 +662,7 @@ export default function Transactions() {
           )}
 
           {showsQuantity && (
-            <Space style={{ display: 'flex' }} align="start">
+            <Space className="mobile-form-row" style={{ display: 'flex' }} align="start">
               <Form.Item name="quantity" label={isAdjustment ? '校准后的总数量' : '数量'} rules={isAdjustment ? [{ required: true, message: '请填写总数量' }] : []} style={{ flex: 1 }}>
                 <InputNumber min={0} style={{ width: '100%' }} placeholder="股数/份额" />
               </Form.Item>
@@ -673,12 +717,16 @@ export default function Transactions() {
                   </div>
                 ) : (
                   <div style={{ marginTop: 4, color: '#fa8c16', fontSize: 12 }}>
-                    该账户现金尚未初始化，预计余额不可用（请先在账户详情记录一笔「现金校准/初始化」）
+                    {selectedAction === 'sell'
+                      ? '本笔卖出净额将自动记入现金，无需先初始化；已有闲置现金可另行校准。'
+                      : '尚无现金基准；请在账户详情校准已有现金，以完整追踪买入支出。'}
                   </div>
                 )
               ) : (
                 <div style={{ marginTop: 4, color: '#999', fontSize: 12 }}>
-                  未匹配到该平台+币种的现金账户（本笔现金变动仍会正确记账）
+                  {selectedAction === 'sell'
+                    ? '本笔卖出将自动建立同币种现金账户并记入净额。'
+                    : '暂无该币种现金流水；已有闲置现金可在账户详情校准。'}
                 </div>
               )}
             </div>
@@ -695,7 +743,7 @@ export default function Transactions() {
         title="导入交易记录"
         open={importOpen}
         onClose={() => setImportOpen(false)}
-        width={780}
+        width={isMobile ? '100%' : 780}
         destroyOnHidden
       >
         <Steps

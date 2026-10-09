@@ -11,7 +11,8 @@ def setup_position(client, **values):
 
 
 def holdings(client):
-    return client.get('/api/holdings?include_closed=true').json()
+    return [h for h in client.get('/api/holdings?include_closed=true').json()
+            if h['asset_type'] != 'cash']
 
 
 def transaction(client, base, action, quantity, **values):

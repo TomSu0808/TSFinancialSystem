@@ -138,11 +138,25 @@ export const getPortfolioSummary = () =>
   client.get('/research/portfolio-summary').then((r) => r.data)
 
 // ---- 交易记录 ----
+// 保存成功后再刷新行情；行情失败不能让用户误以为保存失败而重复录入。
+const withTransactionRefresh = async (request) => {
+  const response = await request
+  try {
+    const result = await refreshPrices()
+    if (result.results?.some((r) => r.status === 'error' || r.status === 'not_found')) {
+      window.dispatchEvent(new Event('quotes:refresh-failed'))
+    }
+  } catch {
+    window.dispatchEvent(new Event('quotes:refresh-failed'))
+  }
+  return response.data
+}
+
 export const listTransactions = (params) =>
   client.get('/transactions', { params }).then((r) => r.data)
-export const createTransaction = (data) => client.post('/transactions', data).then((r) => r.data)
-export const updateTransaction = (id, data) => client.put(`/transactions/${id}`, data).then((r) => r.data)
-export const deleteTransaction = (id) => client.delete(`/transactions/${id}`).then((r) => r.data)
+export const createTransaction = (data) => withTransactionRefresh(client.post('/transactions', data))
+export const updateTransaction = (id, data) => withTransactionRefresh(client.put(`/transactions/${id}`, data))
+export const deleteTransaction = (id) => withTransactionRefresh(client.delete(`/transactions/${id}`))
 // ---- 旧版 CSV 导入（保留兼容）----
 export const previewTransactionImport = (file) => {
   const fd = new FormData()
@@ -152,7 +166,7 @@ export const previewTransactionImport = (file) => {
 export const commitTransactionImport = (file) => {
   const fd = new FormData()
   fd.append('file', file)
-  return client.post('/transactions/import/commit', fd).then((r) => r.data)
+  return withTransactionRefresh(client.post('/transactions/import/commit', fd))
 }
 
 // ---- 新版导入系统（Phase 1）----
@@ -168,7 +182,7 @@ export const commitImport = (importSessionId, { selected_rows, edited_rows }) =>
   const fd = new FormData()
   if (selected_rows) fd.append('selected_rows', selected_rows)
   if (edited_rows) fd.append('edited_rows', JSON.stringify(edited_rows))
-  return client.post(`/imports/${importSessionId}/commit`, fd).then((r) => r.data)
+  return withTransactionRefresh(client.post(`/imports/${importSessionId}/commit`, fd))
 }
 export const getImportReconciliation = (importSessionId) =>
   client.get(`/imports/${importSessionId}/reconciliation`).then((r) => r.data)
@@ -214,18 +228,5 @@ export const getAutomationStatus = () => client.get('/automation/status').then((
 export const runNow = () => client.post('/automation/run-now').then((r) => r.data)
 export const listAutomationRuns = () => client.get('/automation/runs').then((r) => r.data)
 
-// ---- 提醒规则 ----
-export const listAlertRules = () => client.get('/alerts/rules').then((r) => r.data)
-export const createAlertRule = (data) => client.post('/alerts/rules', data).then((r) => r.data)
-export const updateAlertRule = (id, data) => client.put(`/alerts/rules/${id}`, data).then((r) => r.data)
-export const deleteAlertRule = (id) => client.delete(`/alerts/rules/${id}`).then((r) => r.data)
-
-// ---- 提醒事件 ----
-export const listAlertEvents = (params) => client.get('/alerts/events', { params }).then((r) => r.data)
-export const getUnreadCount = () => client.get('/alerts/events/unread-count').then((r) => r.data)
-export const markEventRead = (id) => client.post(`/alerts/events/${id}/read`).then((r) => r.data)
-export const markAllRead = () => client.post('/alerts/events/read-all').then((r) => r.data)
-export const dismissEvent = (id) => client.post(`/alerts/events/${id}/dismiss`).then((r) => r.data)
-export const evaluateAlerts = () => client.post('/alerts/evaluate').then((r) => r.data)
 
 export default client

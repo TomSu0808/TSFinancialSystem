@@ -28,7 +28,7 @@ FinancialSystem/
 │
 ├─ backend/                       FastAPI 后端
 │  ├─ main.py                     入口：初始化 DB + 挂载路由 + CORS + 托管前端静态文件
-│  ├─ database.py                 SQLite 引擎 / init_db（自动迁移补列）/ get_session
+│  ├─ database.py                 SQLite/PostgreSQL 引擎 / init_db（补列、重建卖出现金、解除旧提醒持仓引用）/ get_session
 │  ├─ models.py                   ★核心：表模型 + API schema + 市值/涨亏/盈亏计算口径
 │  ├─ position.py                 ★交易驱动核心：replay_transactions / recompute_holding / resolve_derived_holding
 │  ├─ cash_service.py             ★现金账本核心：replay_cash / recalc_cash / check_cash（按平台+币种重放现金）
@@ -55,6 +55,7 @@ FinancialSystem/
 │  ├─ conftest.py                 内存 DB + 覆盖 get_session/get_current_user 夹具
 │  ├─ test_position.py            replay_transactions 纯逻辑单测
 │  ├─ test_cash.py                现金账本：初始化/买卖/手填金额/账户币种隔离/编辑删除重算/负余额时间线拒绝
+│  ├─ test_removed_alerts.py      提醒接口移除与旧表兼容验证
 │  └─ test_transactions_drive_holdings.py  通过 API 端到端验证交易驱动持仓
 │
 └─ frontend/                      React 前端
@@ -63,6 +64,7 @@ FinancialSystem/
    └─ src/
       ├─ main.jsx                 入口（挂载 Router）
       ├─ App.jsx                  布局 + 路由 + 用户菜单（隐私/深色/改密码/备份）
+      ├─ responsive.css           手机底部导航、卡片、工具栏、筛选与弹窗适配
       ├─ api/index.js             ★前端唯一 API 层（axios + JWT 拦截器，全部接口在此）
       ├─ constants.js             枚举/常量/隐私打码 fmt
       ├─ holdings.js              derived/manual 持仓展示辅助函数（复用于多个页面）
@@ -135,11 +137,23 @@ FinancialSystem/
 | `buy` / `sell` | −(量×价+费) / +(量×价−费)；手填 `amount` 时按实际净额（不重复计费） |
 | `adjust` / `other` | 无现金流 |
 
-**锚定规则**：首条「显式现金记录」（cash_adjust/deposit/withdraw/dividend）之前，buy/sell 不参与计现金——避免把不完整的历史买卖当成真实现金、也不虚构入金。未初始化（无显式现金记录）的现金账户 `balance=None`，前端提示初始化。
+**锚定规则**：首笔卖出或显式现金记录（cash_adjust/deposit/withdraw/dividend）开始现金追踪。卖出无需先初始化，净额自动入账；开始追踪之前的历史买入不扣现金，避免推测缺失的历史入金。只有历史买入、尚无现金事件的账户 `balance=None`，已有闲置现金可按实际余额校准。
 
-**校验**：`check_cash` 把候选交易并入现有流水按时间线重放，任一中间时点余额为负即拒绝（出金/买入超余额、回填/编辑/删除均按时间线校验，绝不用 `max(balance,0)` 掩盖账目问题）。
+**校验**：`check_cash` 把候选交易并入现有流水按时间线重放，拒绝新增或扩大负余额。旧数据重建后已有的缺口按 `(id,date)` 与修改前余额比较，允许保持或缩小，以便补录入金/校准；修改前流水必须在 ORM 对象更新前复制。出金、买入、回填、编辑、移动账户和删除均校验，不截断负余额。
 
 **回写**：`recalc_cash` 重算后回写 `asset_type=cash` 的 derived 持仓（`manual_value=余额`，未初始化置 None），供总览「现金」占比与总资产合计使用；现金变动不进入每日盈亏。
+
+**历史兼容**：启动和备份恢复调用 `rebuild_sale_cash` 重建卖出现金投影，不新增交易，不重复入账。后续现金校准仍覆盖此前余额。提现/出金是资金实际离开账户，与卖出变现分开记录。
+
+### 手机展示与交易行情刷新
+
+`App.jsx` 在小于 768 像素的屏幕显示五栏底部导航；`responsive.css` 处理安全区域、触屏尺寸和窄屏布局。账户详情显示持仓/现金卡片，交易页显示每页 20 条的卡片和折叠筛选，桌面保留表格。总览、账户列表和详情共享并持久化 `DisplaySettingsContext` 的 CNY/USD 展示偏好。
+
+前端 API 的 `withTransactionRefresh` 先完成交易新增、修改、删除或导入，再调用行情刷新，完成后页面重新读取数据。行情请求失败或部分标的未找到时广播 `quotes:refresh-failed`，提示保留上次价格，返回已保存的交易结果，避免重复录入。
+
+### 提醒功能移除
+
+提醒页面、接口、模型、配置和自动评估服务已移除。定时刷新仍更新行情、汇率、资产快照与每日盈亏。旧数据库的提醒表不删除历史文本，启动仅把旧记录的 `holding_id` 置空，避免旧外键阻止删除持仓或恢复备份；新数据库不再创建提醒表。
 
 ---
 
@@ -188,10 +202,10 @@ FinancialSystem/
 2. **买入驱动建仓**：`Transactions.jsx` → `POST /api/transactions`(action=buy) → `_sync_txn_holding` → `resolve_derived_holding(create_if_missing=True)` 建/找 derived 持仓 → `recompute_holding` 重算数量与成本。
 3. **卖出结转盈亏**：同上，sell → replay 计算已实现盈亏，回写 `realized_pnl`，数量归零时置 `status=closed`。
 4. **持仓校准 / 无买入卖出**：手填持仓直接记卖出或「持仓校准」→ `prepare_position` 写期初 `adjust` 记录并转 `derived` → `replay_transactions` 按 (date,id) 重放，扣减数量、重设成本基准；成本未知卖出标 `realized_pnl_incomplete`。
-5. **刷新行情**：Dashboard 点「更新行情」→ `POST /api/holdings/refresh-prices` → `price_provider` 按 market/symbol 抓价 → 写回 `current_price`/`prev_close`。
+5. **刷新行情**：交易写入完成后自动刷新，或 Dashboard 点更新按钮 → `POST /api/holdings/refresh-prices` → `price_provider` 抓价 → 写回 `current_price`/`prev_close`；行情失败不撤销已保存交易。
 6. **看总览**：`GET /api/summary?currency=CNY|USD` → 后端用 `market_value`/`day_change`/`cost_basis` 累加 + 已实现盈亏 + `FxRate` 换算 → 顺带 upsert 每日快照。
-7. **币种切换**：前端只换 `currency` 参数重拉 summary，金额由后端换算。
-8. **现金记账**：入金/出金/分红/现金校准/买卖 → `check_cash` 时间线校验 → `recalc_cash` 按 (平台+币种) 重放并回写 cash holding；未初始化时买卖不虚构现金。
+7. **币种切换**：总览用 `currency` 参数重拉 summary；账户页按保存的汇率用 `convertAmount` 折算，共享并记住展示偏好。
+8. **现金记账**：入金/出金/分红/现金校准/买卖 → `check_cash` 时间线校验 → `recalc_cash` 按 (平台+币种) 重放并回写 cash holding；首笔卖出自动计入现金，提现单独扣减。
 
 ---
 
@@ -212,6 +226,7 @@ FinancialSystem/
 - 一键：`python dev.py start`（或双击 `start.bat`/`start.sh`）。停止：`dev.py stop`。
 - 后端单独：`backend/` 下 `.\.venv\Scripts\python.exe -m uvicorn main:app --reload`
 - 前端单独：`frontend/` 下 `npm run dev`
+- 前端验证：`frontend/` 下 `npm test`、`npm run build`；接口测试在 `frontend/tests/transaction-refresh.test.js`。
 - 测试：`backend/` 下 `.\.venv\Scripts\pytest tests/ -v`
 - Windows 注意：用 PowerShell 直接调 `.\.venv\Scripts\python.exe`，勿在 Git Bash 跑 Store 版 Python。
 

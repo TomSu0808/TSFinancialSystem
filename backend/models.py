@@ -511,56 +511,6 @@ class AutomationRun(SQLModel, table=True):
     error_message: Optional[str] = None
 
 
-# ── 提醒规则 ───────────────────────────────────────────────────────────────────
-class AlertRule(SQLModel, table=True):
-    """用户配置的提醒规则。"""
-    id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: int = Field(foreign_key="user.id", index=True)
-    name: str = ""
-    # price_above / price_below / day_change_pct_above / day_change_pct_below
-    # allocation_above / allocation_below / price_stale / refresh_failed
-    alert_type: str = ""
-    enabled: bool = True
-    holding_id: Optional[int] = Field(default=None, foreign_key="holding.id", index=True)
-    symbol: Optional[str] = None
-    currency: Optional[str] = None
-    threshold_value: Optional[float] = None   # 价格/涨跌幅/比例阈值
-    stale_hours: Optional[int] = None         # price_stale 专用：超过多少小时算过期
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
-
-
-# ── 提醒事件 ───────────────────────────────────────────────────────────────────
-class AlertEvent(SQLModel, table=True):
-    """触发的提醒事件（站内通知）。"""
-    id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: int = Field(foreign_key="user.id", index=True)
-    rule_id: Optional[int] = Field(default=None, foreign_key="alertrule.id", index=True)
-    alert_type: str = ""
-    severity: str = Field(default="info")   # info / warning / critical
-    title: str = ""
-    message: str = ""
-    holding_id: Optional[int] = Field(default=None, foreign_key="holding.id", index=True)
-    symbol: Optional[str] = None
-    value: Optional[float] = None            # 触发时的实际值
-    threshold_value: Optional[float] = None
-    status: str = Field(default="unread")   # unread / read / dismissed
-    triggered_at: datetime = Field(default_factory=datetime.utcnow)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-
-
-# ── AlertRule schemas ──────────────────────────────────────────────────────────
-class AlertRuleCreate(SQLModel):
-    name: str
-    alert_type: str
-    enabled: bool = True
-    holding_id: Optional[int] = None
-    symbol: Optional[str] = None
-    currency: Optional[str] = None
-    threshold_value: Optional[float] = None
-    stale_hours: Optional[int] = None
-
-
 # ── 导入会话 ───────────────────────────────────────────────────────────────────
 class ImportSession(SQLModel, table=True):
     """一次导入会话（preview → commit 流程）。"""
@@ -598,17 +548,6 @@ class ReconSnapshot(SQLModel, table=True):
     status: str = "matched"                 # matched / warning / error
     detail_json: Optional[str] = None       # JSON: 额外详情
     created_at: datetime = Field(default_factory=datetime.utcnow)
-
-
-class AlertRuleUpdate(SQLModel):
-    name: Optional[str] = None
-    alert_type: Optional[str] = None
-    enabled: Optional[bool] = None
-    holding_id: Optional[int] = None
-    symbol: Optional[str] = None
-    currency: Optional[str] = None
-    threshold_value: Optional[float] = None
-    stale_hours: Optional[int] = None
 
 
 def market_value(h: Holding) -> float:

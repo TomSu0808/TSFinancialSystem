@@ -18,7 +18,7 @@ from database import init_db
 from routers import (
     auth, backup, cash, fx, holdings, imports, notes, platforms, research, snapshots, summary, transactions,
 )
-from routers import ai_keys, automation, alerts
+from routers import ai_keys, automation
 import scheduler
 
 
@@ -55,7 +55,6 @@ app.include_router(backup.router)
 app.include_router(research.router)
 app.include_router(ai_keys.router)
 app.include_router(automation.router)
-app.include_router(alerts.router)
 
 
 @app.get("/api/health")

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useColorScheme } from '../colorScheme.jsx'
 import { useDisplaySettings, convertAmount } from '../displaySettings.jsx'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
-  Button, Card, Col, Empty, Form, Input, Modal, Popconfirm, Progress, Row, Segmented, Space, Table, Tag, message,
+  Button, Card, Col, Empty, Form, Grid, Input, Modal, Popconfirm, Progress, Row, Segmented, Space, Table, Tag, message,
 } from 'antd'
 import { PlusOutlined, LinkOutlined, ArrowRightOutlined } from '@ant-design/icons'
 import {
@@ -13,6 +13,9 @@ import { CURRENCY_SYMBOL, ASSET_TYPE_LABEL, fmt } from '../constants'
 import { marketValue, costBasis, profitOf, isDerived } from '../holdings'
 
 export default function Platforms() {
+  const navigate = useNavigate()
+  const screens = Grid.useBreakpoint()
+  const isMobile = !screens.md
   const { upColor, downColor } = useColorScheme()
   const { displayCurrency, setDisplayCurrency } = useDisplaySettings()
   const [data, setData] = useState([])
@@ -271,6 +274,11 @@ export default function Platforms() {
                   {p.topHolding && <Tag color="blue">最大：{p.topHolding.name || p.topHolding.symbol}</Tag>}
                 </Space>
                 {p.note && <div style={{ color: '#8c8c8c', marginTop: 10 }}>{p.note}</div>}
+                {isMobile && <div className="mobile-record-actions">
+                  <Button type="primary" onClick={() => navigate(`/platforms/${p.id}`)}>查看持仓</Button>
+                  <Button onClick={() => openEdit(p)}>编辑</Button>
+                  <Popconfirm title="删除该账户及其下所有资产？" onConfirm={() => remove(p.id)}><Button danger>删除</Button></Popconfirm>
+                </div>}
               </Card>
             </Col>
           ))}
@@ -285,7 +293,7 @@ export default function Platforms() {
         </Card>
       )}
 
-      <Card title="账户明细" loading={loading}>
+      {!isMobile && <Card title="账户明细" loading={loading}>
         <Table
           rowKey="id"
           dataSource={data}
@@ -296,7 +304,7 @@ export default function Platforms() {
             rowExpandable: (r) => (byPlatform[r.id] || []).length > 0,
           }}
         />
-      </Card>
+      </Card>}
 
       <Modal title={editing ? '编辑账户' : '添加账户'} open={open} onOk={submit} onCancel={() => setOpen(false)} destroyOnHidden>
         <Form form={form} layout="vertical">

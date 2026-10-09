@@ -41,16 +41,16 @@ The hosted version supports registration, login, HTTPS, and isolated multi-user 
 | Capability | What it does |
 | --- | --- |
 | Multi-account tracking | Manage assets by broker, bank, wallet, or custom account, such as Futu, IBKR, Tiger, bank cards, and crypto wallets. |
-| Multi-currency overview | Track CNY, USD, HKD, and more, with a global CNY / USD display-currency switch. |
+| Multi-currency overview | Track CNY, USD, HKD, and more; switch between CNY / USD on the Dashboard, account list, and account detail, with a saved display preference. |
 | Transaction-driven holdings | Buy, sell, and dividend transactions update derived holdings, weighted-average cost, realized P&L, and closed-position status. |
 | Dashboard | Review total assets, daily change, total return, unrealized / realized P&L, allocation, net-worth charts, and data status. |
-| Market and FX refresh | Refresh A-share, HK, US, fund, crypto, and USD/CNY FX data through free data sources. |
+| Market and FX refresh | Refresh A-share, HK, US, fund, crypto, and USD/CNY FX data; creating, editing, deleting, or importing transactions automatically refreshes market quotes. |
 | CSV import and reconciliation | Import Futu, IBKR, or generic CSV files with preview validation, deduplication, commit, and reconciliation. |
-| Cash ledger | Manage cash per account and currency: deposit, withdraw, dividend, and cash adjustment link to buy/sell flows, with init/calibrate, a cash ledger, and negative-balance checks. |
+| Cash ledger | Track cash per account and currency; net sale proceeds remain in the account, while withdrawals reduce cash separately. Includes calibration, ledger history, and overdraft checks. |
+| Mobile workflows | Five-tab bottom navigation, holding/cash/transaction cards, expandable details, transaction pagination, collapsed filters, and stacked entry forms. |
 | Decision log | Track thesis, risk, review, action items, and observations, linked to symbols or holdings. |
 | AI research workspace | Generate Chinese or English research reports with GPT, DeepSeek, GLM, Claude, or other OpenAI-compatible providers. |
 | AI action loop | Extract action items from AI reports into the decision log and track their status over time. |
-| Alerts | Create rules for price thresholds, daily change, allocation, stale data, and refresh failures. |
 | Privacy and security | JWT auth, per-user isolation, amount masking, dark mode, email verification, password recovery, and BYOK. |
 | Self-hosting | One Docker image serves the React frontend and FastAPI backend. SQLite is the default, with PostgreSQL available through `DATABASE_URL`. |
 
@@ -59,7 +59,7 @@ The hosted version supports registration, login, HTTPS, and isolated multi-user 
 1. Register an account and create platforms for brokers, banks, wallets, or custom accounts.
 2. Add manual holdings, or record buy, sell, dividend, deposit, withdraw, and cash-adjustment transactions.
 3. Import historical transactions with CSV when migrating existing records.
-4. Refresh market prices and FX rates, or enable scheduled refresh on the Dashboard.
+4. Quotes refresh after transaction changes; use the Dashboard refresh button to update FX or retry unavailable quotes.
 5. Review total assets, returns, allocation, net-worth trend, and data freshness.
 6. Generate AI research for important holdings and save action items into the decision log.
 7. Export a full-account JSON backup when you need to migrate or archive data.
@@ -74,7 +74,20 @@ The hosted version supports registration, login, HTTPS, and isolated multi-user 
 | Transactions | Record, search, filter, and import buy / sell / dividend / deposit / withdraw / cash-adjustment records; the buy/sell form shows current holdings and cash impact. |
 | AI Research | Select a template, choose a symbol or portfolio, and generate structured Markdown reports. |
 | Decision Log | Track thesis, risks, reviews, action items, and links to holdings or AI reports. |
-| Alerts | Manage alert rules and review triggered events or refresh failures. |
+
+## Sales, Cash, and Withdrawals
+
+Account assets include holdings at market value and cash. Net sale proceeds (quantity × price minus fees, or the entered net amount) stay in the same account and currency for reinvestment. Record a withdrawal only when money leaves the account. A $1,000 sale with $5 fees adds $995 cash; a subsequent $300 withdrawal reduces cash by $300.
+
+The first sale starts cash tracking automatically. Use cash calibration in account detail to record existing idle cash as an absolute balance at that date. Historical purchases before cash tracking starts do not infer missing deposits; later purchases deduct cash. Calibration replaces the previous running balance rather than adding it twice.
+
+Edits, deletions, and imports recalculate holdings and cash. Failed quote refreshes keep the saved transaction and display the last available price. Upgrades rebuild historical sale cash; existing gaps can be repaired, while new or worsened overdrafts are rejected.
+
+## Mobile Use
+
+The bottom navigation opens overview, accounts, transactions, research, and notes. Holding, cash-ledger, and transaction cards expand to reveal costs, fees, notes, and actions. Transaction filters start collapsed, records paginate in groups of 20, and entry forms stack vertically. Display-currency changes preserve the original transaction currency.
+
+Price/allocation alerts were removed on 2026-10-09, including their pages, APIs, and evaluation jobs. Scheduled market and FX refreshes continue to run.
 
 ## Data Sources
 
@@ -138,7 +151,6 @@ For local development, copy `backend/.env.example` to `backend/.env`. In product
 | `AUTO_REFRESH_ENABLED` | Enables scheduled refresh. |
 | `AUTO_REFRESH_TIME` | Daily refresh time in `HH:MM` format. |
 | `AUTO_REFRESH_TIMEZONE` | Timezone for scheduled refresh. Defaults to `Asia/Shanghai`. |
-| `ALERTS_ENABLED` | Enables alert rule evaluation. |
 
 ## PostgreSQL Deployment
 
@@ -194,7 +206,7 @@ FinancialSystem/
 ├── frontend/                   React frontend
 │   └── src/
 │       ├── api/                Axios API layer
-│       ├── pages/              Dashboard, platforms, transactions, AI, logs, alerts
+│       ├── pages/              Dashboard, platforms, transactions, AI, logs
 │       ├── displaySettings.jsx Global display-currency context
 │       └── colorScheme.jsx     Up/down color preference
 ├── docs/                       Design documents and historical plans
@@ -210,6 +222,10 @@ FinancialSystem/
 - [Technical Roadmap](TECHNICAL_ROADMAP.md): engineering roadmap, priorities, and acceptance criteria.
 - [Changelog](CHANGELOG.md): completed features and behavior changes.
 - [Phase 1 Import Design](docs/superpowers/specs/2026-06-28-phase1-import-reconciliation-design.md): import and reconciliation system design.
+
+## Development Checks
+
+In a Python environment with backend dependencies installed, run `cd backend` and `python -m pytest tests/ -q`. For the frontend, run `cd frontend`, `npm ci`, `npm test`, and `npm run build`. GitHub Actions checks backend tests, frontend tests/build, and the Docker image build.
 
 ## Disclaimer
 

@@ -200,13 +200,14 @@ export default function Notes() {
     >
       {/* Filter bar */}
       <Form
+        className="mobile-filters"
         form={filterForm}
         layout="inline"
         size="small"
         style={{ marginBottom: 12, flexWrap: 'wrap', gap: '6px 0' }}
         onFinish={applyFilters}
       >
-        <Form.Item name="keyword" style={{ marginBottom: 6 }}>
+        <Form.Item className="filter-wide" name="keyword" style={{ marginBottom: 6 }}>
           <Input placeholder="关键词（标题/内容）" style={{ width: 160 }} allowClear />
         </Form.Item>
         <Form.Item name="symbol" style={{ marginBottom: 6 }}>

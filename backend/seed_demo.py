@@ -21,7 +21,7 @@ from sqlmodel import Session, select
 from auth import hash_password
 from database import init_db, engine
 from models import (
-    AlertRule, Currency, Holding, HoldingSource, HoldingStatus,
+    Currency, Holding, HoldingSource, HoldingStatus,
     Note, Platform, Transaction, TxnAction, User,
 )
 
@@ -267,32 +267,6 @@ def _ensure_notes(session: Session, user: User) -> None:
     session.commit()
 
 
-def _ensure_alerts(session: Session, user: User) -> None:
-    """确保 Demo 用户有一些提醒规则。"""
-    existing = session.exec(
-        select(AlertRule).where(AlertRule.user_id == user.id)
-    ).all()
-    if existing:
-        print("[seed] 提醒规则已存在，跳过。")
-        return
-
-    rules = [
-        AlertRule(
-            user_id=user.id, name="腾讯价格预警",
-            alert_type="price_below", symbol="0700", currency="HKD",
-            threshold_value=320, enabled=True,
-        ),
-        AlertRule(
-            user_id=user.id, name="行情过期提醒",
-            alert_type="price_stale", stale_hours=24, enabled=True,
-        ),
-    ]
-    for r in rules:
-        session.add(r)
-    session.commit()
-    print(f"[seed] 创建 {len(rules)} 条提醒规则")
-
-
 def main():
     init_db()
 
@@ -302,7 +276,6 @@ def main():
         _ensure_holdings(session, user, plat_map)
         _ensure_transactions(session, user, plat_map)
         _ensure_notes(session, user)
-        _ensure_alerts(session, user)
 
     print("\n[seed] ✅ Demo 数据初始化完成。")
     print(f"[seed] 登录账号：{DEMO_USERNAME} / {DEMO_PASSWORD}")

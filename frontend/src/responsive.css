@@ -1,0 +1,78 @@
+.profile-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 10px;
+  color: #fff;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.desktop-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.mobile-record-list { display: grid; gap: 12px; }
+.mobile-record-header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.mobile-record-header > div { min-width: 0; }
+.mobile-record-name { font-size: 16px; font-weight: 650; overflow-wrap: anywhere; }
+.mobile-record-value { font-size: 19px; font-weight: 700; overflow-wrap: anywhere; text-align: right; }
+.mobile-record-meta { margin-top: 4px; font-size: 12px; color: var(--mobile-muted, #8c8c8c); }
+.mobile-record-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.mobile-record-grid > div { min-width: 0; overflow-wrap: anywhere; }
+.mobile-record-label { display: block; font-size: 12px; color: var(--mobile-muted, #8c8c8c); margin-bottom: 4px; }
+.mobile-record-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.mobile-record-actions a { display: inline-flex; min-height: 44px; padding: 10px 4px; align-items: center; }
+
+@media (max-width: 767px) {
+  .app-header { position: sticky; top: 0; z-index: 20; height: 56px; line-height: 56px; }
+  .app-content { padding: 12px 12px calc(84px + env(safe-area-inset-bottom)) !important; min-width: 0; }
+  .app-content > * { min-width: 0; }
+  .app-content .ant-card-body { padding: 16px !important; }
+  .app-content .ant-card-head { padding: 14px 16px; min-height: 48px; }
+  .app-content .ant-card-head-wrapper { flex-wrap: wrap; gap: 10px; }
+  .app-content .ant-card-head-title { white-space: normal; overflow-wrap: anywhere; }
+  .app-content .ant-card-extra { max-width: 100%; margin-inline-start: 0; }
+  .app-content .ant-table-wrapper { max-width: 100%; }
+  .mobile-bottom-nav {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
+    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+    padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
+    background: var(--mobile-surface, #fff); border-top: 1px solid var(--mobile-border, #f0f0f0);
+    box-shadow: 0 -3px 16px rgba(0, 0, 0, 0.05);
+  }
+  .mobile-bottom-nav a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 50px; color: var(--mobile-muted, #8c8c8c); font-size: 11px; border-radius: 10px; }
+  .mobile-bottom-nav .anticon { font-size: 20px; }
+  .mobile-bottom-nav a[aria-current="page"] { color: #1677ff; background: rgba(22, 119, 255, 0.08); font-weight: 600; }
+  .mobile-toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
+  .mobile-toolbar > .ant-btn { width: 100%; height: 44px; }
+  .mobile-toolbar .ant-segmented { grid-column: 1 / -1; }
+  .mobile-toolbar .ant-segmented-group { display: flex; }
+  .mobile-toolbar .ant-segmented-item { flex: 1; text-align: center; }
+  .mobile-toolbar .ant-segmented-item-label { min-height: 40px; line-height: 40px; }
+  .mobile-toolbar .closed-toggle { display: flex; align-items: center; gap: 8px; grid-column: 1 / -1; }
+  .mobile-filters.ant-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .mobile-filters .ant-form-item { min-width: 0; margin: 0; }
+  .mobile-filters .filter-wide { grid-column: 1 / -1; }
+  .mobile-filters .ant-input-affix-wrapper, .mobile-filters .ant-select, .mobile-filters .ant-picker { width: 100% !important; }
+  .mobile-filters .ant-btn { width: 100%; min-height: 40px; }
+  .mobile-form-row.ant-space { display: grid !important; grid-template-columns: minmax(0, 1fr); gap: 0 !important; }
+  .mobile-form-row > .ant-space-item { min-width: 0; }
+  .ant-modal { max-width: calc(100vw - 24px); margin: 0 auto; top: 12px; padding-bottom: 12px; }
+  .ant-modal .ant-modal-content { padding: 20px 16px; }
+  .ant-modal .ant-modal-body { max-height: calc(100dvh - 160px); overflow-y: auto; overscroll-behavior: contain; }
+  .ant-modal .ant-input, .ant-modal .ant-input-number-input, .ant-modal .ant-select-selection-item { font-size: 16px; }
+  .ant-modal .ant-btn, .mobile-record-actions .ant-btn { min-height: 44px; }
+  .ant-drawer-content-wrapper { max-width: 100vw; }
+  .ant-drawer-body { padding: 16px; }
+  .dashboard-total { font-size: clamp(28px, 8vw, 38px) !important; overflow-wrap: anywhere; }
+  .account-total-value { font-size: clamp(18px, 4.6vw, 22px) !important; overflow-wrap: anywhere; }
+  .dashboard-intro-actions { display: none !important; }
+  .dashboard-intro h3 { font-size: 23px; }
+  .app-content .ant-collapse-content-box { padding: 12px !important; }
+  .app-content .ant-pagination { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px; margin-top: 16px; }
+  .app-content .ant-pagination-item, .app-content .ant-pagination-prev, .app-content .ant-pagination-next { min-width: 40px; height: 40px; line-height: 38px; }
+  .markdown-body { max-width: 100%; overflow-wrap: anywhere; }
+  .markdown-body table, .markdown-body pre { display: block; max-width: 100%; overflow-x: auto; }
+}
