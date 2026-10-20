@@ -18,6 +18,23 @@
 
 <!-- 在下面这条横线下方追加新记录，保持最新在最上 -->
 
+## [功能] - 2026-10-20 港股通跨币种结算（人民币买入港币计价股票）
+
+### 类型：✨新增 / 🐛修复
+
+- **改了什么**：
+  1. **交易新增「结算币种」**：买卖/分红可单独选择现金收付币种（`cash_currency`）与结算汇率（`fx_rate`）。典型场景是港股通——股票按港币报价和持仓（如腾讯 200 股 @410.2 HKD），现金实际从人民币账户扣款。选择结算币种 CNY 后，持仓仍是 HKD，现金账本按 CNY 记录；可手填券商实际结算金额（`amount`，优先级最高），也可留空按「数量×价格±费用×汇率」估算。
+  2. **现金账本按结算币种重放**：账户现金列表、现金流水、预计交易后余额、负余额时间线校验、修改/删除交易后的重算，全部改用结算币种；同一账户可同时存在 CNY/USD/HKD 现金账户且互不串账。未初始化现金时仍不虚构现金流。
+  3. **录入入口**：交易页「记一笔」与账户详情「添加资产（通过交易自动计算）」均增加结算币种/汇率，选择后自动带出当前 USD/CNY 折算汇率（HKD 按 7.8 联系汇率近似），可手动覆盖；交易列表币种列显示 `HKD→CNY` 并提示汇率。
+  4. **导入与备份**：普通 CSV 新增 `cash_currency`、`fx_rate` 列；券商导入、备份导出/恢复均保留结算币种与汇率。
+- **为什么**：此前一笔交易只有一个币种，同时承担「计价/持仓」和「现金收付」两种角色。港股通股票按 HKD 计价、却用 CNY 结算，导致要么持仓币种错、要么现金无法从人民币账户扣除，只能手工用港币现金伪造兑换。现在两个币种可以分开记录，现金与持仓都对得上券商账单。
+- **影响范围**：`backend/models.py`、`backend/database.py`、`backend/cash_service.py`、`backend/fx_utils.py`（新增）、`backend/transaction_validation.py`、`backend/routers/transactions.py`、`backend/routers/cash.py`、`backend/routers/backup.py`、`backend/import_service.py`、`backend/tests/test_cross_currency_trade.py`（新增）、`frontend/src/cash.js`、`frontend/src/pages/Transactions.jsx`、`frontend/src/pages/PlatformDetail.jsx`、`CHANGELOG.md`。
+- **注意事项**：
+  - 数据库结构变更：`transaction` 表新增 `cash_currency`、`fx_rate` 两列，重启后端自动补列，无需重装依赖。
+  - 不填结算币种时行为与旧版完全一致（同币种买卖不受影响）。
+  - 持仓盈亏仍按计价币种（港股为 HKD）计算；总资产按当前汇率折算展示，不把历史汇率差并入持仓成本。
+  - 已验证：后端全量 370 项测试（含新增 7 项跨币种结算用例）、前端 8 项测试及 `npm run build` 通过。
+
 ## [功能调整] - 2026-10-09 手机端布局优化与移除提醒
 
 - **手机导航**：增加总览、账户、交易、投研、笔记五栏底部导航，适配安全区域；个人设置支持点按打开。

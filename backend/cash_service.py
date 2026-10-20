@@ -43,6 +43,34 @@ _ACTION_LABEL = {
 }
 
 
+def settlement_currency(txn: Transaction) -> Currency:
+    """现金收付币种：显式结算币种优先，否则与计价/持仓币种相同。"""
+    return txn.cash_currency or txn.currency
+
+
+def cash_transactions(
+    session: Session,
+    user_id: int,
+    platform_id: int,
+    currency: Currency,
+    *,
+    exclude_txn_id: Optional[int] = None,
+) -> list:
+    """某 (user, platform, 结算币种) 的现金流水。
+
+    跨币种交易的 Transaction.currency 是计价币种（如 HKD），
+    不能再用 SQL 的 currency 过滤，必须按 settlement_currency 过滤。
+    """
+    stmt = select(Transaction).where(
+        Transaction.user_id == user_id,
+        Transaction.platform_id == platform_id,
+        Transaction.action.in_(CASH_ACTIONS),
+    )
+    if exclude_txn_id is not None:
+        stmt = stmt.where(Transaction.id != exclude_txn_id)
+    return [t for t in session.exec(stmt).all() if settlement_currency(t) == currency]
+
+
 def _explicit_amount(txn: Transaction) -> Decimal:
     """deposit/withdraw/dividend/cash_adjust 的金额：优先 amount，其次 quantity。"""
     amt = txn.amount
@@ -52,12 +80,21 @@ def _explicit_amount(txn: Transaction) -> Decimal:
 
 
 def _trade_net(txn: Transaction) -> Decimal:
-    """buy/sell 的净现金流（正数）：手填 amount 为实际净额，否则 量×价 ± 费。"""
+    """buy/sell 的净现金流（正数，结算币种）：手填 amount 为实际净额，
+    否则 量×价 ± 费，跨币种时再乘结算汇率。"""
     if txn.amount is not None:
         return to_d(txn.amount)
     gross = to_d(txn.quantity) * to_d(txn.price)
     fee = to_d(txn.fee)
-    return gross + fee if txn.action == TxnAction.buy else gross - fee
+    net = gross + fee if txn.action == TxnAction.buy else gross - fee
+    if settlement_currency(txn) != txn.currency:
+        if txn.fx_rate is None:
+            raise HTTPException(
+                400,
+                f"{txn.date} 跨币种交易缺少结算汇率，请填写汇率或实际结算金额",
+            )
+        net = net * to_d(txn.fx_rate)
+    return net
 
 
 def cash_flow(txn: Transaction) -> Optional[Decimal]:
@@ -138,14 +175,7 @@ def recalc_cash(
     未初始化时把已有 cash holding 的 manual_value 置 None（不删除），不新建；
     已初始化时按余额回写（不 clamp）。只 flush，由调用方统一提交。
     """
-    txns = session.exec(
-        select(Transaction).where(
-            Transaction.user_id == user.id,
-            Transaction.platform_id == platform_id,
-            Transaction.currency == currency,
-            Transaction.action.in_(CASH_ACTIONS),
-        )
-    ).all()
+    txns = cash_transactions(session, user.id, platform_id, currency)
     st = replay_cash(txns)
 
     cash = session.exec(
@@ -198,14 +228,7 @@ def get_cash_balance(
     currency: Currency,
 ) -> float:
     """按流水重放得到现金余额（只读，不修改 DB）。未初始化返回 0.0。"""
-    txns = session.exec(
-        select(Transaction).where(
-            Transaction.user_id == user.id,
-            Transaction.platform_id == platform_id,
-            Transaction.currency == currency,
-            Transaction.action.in_(CASH_ACTIONS),
-        )
-    ).all()
+    txns = cash_transactions(session, user.id, platform_id, currency)
     st = replay_cash(txns)
     return to_float(st.balance) if st.started else 0.0
 
@@ -215,16 +238,24 @@ def rebuild_sale_cash(session: Session, user_id: Optional[int] = None) -> None:
 
     不完整历史可能产生负余额，保留真实重放结果以便用户校准，不伪造入金。
     """
-    stmt = select(Transaction.user_id, Transaction.platform_id, Transaction.currency).where(
+    stmt = select(
+        Transaction.user_id, Transaction.platform_id,
+        Transaction.currency, Transaction.cash_currency,
+    ).where(
         Transaction.action == TxnAction.sell,
         Transaction.platform_id.is_not(None),
     ).distinct()
     if user_id is not None:
         stmt = stmt.where(Transaction.user_id == user_id)
-    for uid, pid, currency in session.exec(stmt).all():
+    seen = set()
+    for uid, pid, currency, cash_currency in session.exec(stmt).all():
+        key = (uid, pid, cash_currency or currency)
+        if key in seen:
+            continue
+        seen.add(key)
         user = session.get(User, uid)
         if user is not None:
-            recalc_cash(session, user, pid, currency)
+            recalc_cash(session, user, pid, key[2])
 
 
 def check_cash(
@@ -242,18 +273,16 @@ def check_cash(
         return
     if txn.platform_id is None or txn.currency is None:
         return
+    currency = settlement_currency(txn)
     with session.no_autoflush:
-        txns = session.exec(select(Transaction).where(
-            Transaction.user_id == user.id,
-            Transaction.platform_id == txn.platform_id,
-            Transaction.currency == txn.currency,
-            Transaction.action.in_(CASH_ACTIONS),
-            Transaction.id != exclude_txn_id if exclude_txn_id is not None else True,
-        )).all()
+        txns = cash_transactions(
+            session, user.id, txn.platform_id, currency, exclude_txn_id=exclude_txn_id,
+        )
     max_id = max((t.id or 0 for t in txns), default=0)
     candidate = txn.model_copy(update={"id": txn.id or (max_id + 1)})
     previous = list(txns)
-    if previous_txn is not None and (previous_txn.platform_id, previous_txn.currency) == (txn.platform_id, txn.currency):
+    if (previous_txn is not None
+            and (previous_txn.platform_id, settlement_currency(previous_txn)) == (txn.platform_id, currency)):
         previous.append(previous_txn)
     replay_cash([*txns, candidate], check_negative=True, previous_txns=previous)
 
@@ -280,13 +309,16 @@ def cash_ledger(txns: Iterable[Transaction]) -> list:
             if started:
                 flow = cash_flow(t)
                 balance += flow
+        cash_cur = settlement_currency(t)
         entries.append({
             "id": t.id,
             "date": t.date,
             "action": t.action.value,
             "symbol": t.symbol,
             "name": t.name,
-            "currency": t.currency.value,
+            "currency": cash_cur.value,
+            "trade_currency": t.currency.value,
+            "fx_rate": t.fx_rate,
             "quantity": t.quantity,
             "price": t.price,
             "fee": t.fee,

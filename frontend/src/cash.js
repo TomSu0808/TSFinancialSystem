@@ -1,12 +1,18 @@
 // 现金账本语义（与 backend/cash_service.py 保持一致，避免前端重复计费/口径不一致）。
 // 纯函数，供交易表单、现金区复用。
 
-// buy/sell 净现金流（正数）：手填 amount 为实际收付净额，否则 量×价 ± 费。
+// 现金收付币种：结算币种优先（港股通：HKD 计价、CNY 收付），否则同计价币种。
+export const settleCurrency = (t) => t.cash_currency || t.currency
+
+// buy/sell 净现金流（正数，结算币种）：手填 amount 为实际收付净额，
+// 否则 量×价 ± 费，跨币种时再乘结算汇率。
 export const tradeNet = (t) => {
   if (t.amount != null) return t.amount
   const gross = (t.quantity || 0) * (t.price || 0)
   const fee = t.fee || 0
-  return t.action === 'buy' ? gross + fee : gross - fee
+  const net = t.action === 'buy' ? gross + fee : gross - fee
+  if (t.cash_currency && t.cash_currency !== t.currency && t.fx_rate) return net * t.fx_rate
+  return net
 }
 
 // deposit/withdraw/dividend/cash_adjust 的金额：优先 amount，其次 quantity（缺失/非正时回退）。

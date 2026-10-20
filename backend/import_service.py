@@ -333,24 +333,14 @@ def commit_import(
             error_details.append({"row": rn, "error": f"无效的 currency: {data.get('currency')}"})
             continue
 
-        # 统一字段校验
-        try:
-            validate_transaction(
-                session, user,
-                action=action,
-                platform_id=pid,
-                currency=currency,
-                symbol=data.get("symbol", ""),
-                name=data.get("name", ""),
-                quantity=data.get("quantity"),
-                price=data.get("price"),
-                fee=data.get("fee"),
-                amount=data.get("amount"),
-                date=data.get("date", ""),
-            )
-        except HTTPException as e:
-            error_details.append({"row": rn, "error": e.detail})
-            continue
+        # 结算币种（港股通：HKD 计价、CNY 收付）
+        cash_currency = None
+        if data.get("cash_currency"):
+            try:
+                cash_currency = Currency(data["cash_currency"])
+            except ValueError:
+                error_details.append({"row": rn, "error": f"无效的 cash_currency: {data.get('cash_currency')}"})
+                continue
 
         # 创建 Transaction
         try:
@@ -362,6 +352,8 @@ def commit_import(
                 name=data.get("name", ""),
                 symbol=data.get("symbol", ""),
                 currency=currency,
+                cash_currency=cash_currency,
+                fx_rate=data.get("fx_rate"),
                 quantity=data.get("quantity"),
                 price=data.get("price"),
                 fee=data.get("fee"),
@@ -370,6 +362,30 @@ def commit_import(
             txn.holding_id = None
         except Exception as e:
             error_details.append({"row": rn, "error": f"创建交易失败: {e}"})
+            continue
+
+        from routers.transactions import _normalize_settlement
+        _normalize_settlement(session, txn)
+
+        # 统一字段校验
+        try:
+            validate_transaction(
+                session, user,
+                action=txn.action,
+                platform_id=txn.platform_id,
+                currency=txn.currency,
+                cash_currency=txn.cash_currency,
+                fx_rate=txn.fx_rate,
+                symbol=txn.symbol,
+                name=txn.name,
+                quantity=txn.quantity,
+                price=txn.price,
+                fee=txn.fee,
+                amount=txn.amount,
+                date=txn.date,
+            )
+        except HTTPException as e:
+            error_details.append({"row": rn, "error": e.detail})
             continue
 
         # 与手工记账共用持仓校验及手填持仓转入，避免导入绕过校准规则。

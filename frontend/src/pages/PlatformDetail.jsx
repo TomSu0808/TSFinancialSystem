@@ -67,6 +67,13 @@ export default function PlatformDetail() {
   const [ledgerLoading, setLedgerLoading] = useState(false)
 
   const rate = fx?.updated_at ? fx.rate : null
+  // 港股通：HKD 计价、CNY 结算
+  const wCurrency = Form.useWatch('currency', form)
+  const wCashCurrency = Form.useWatch('cash_currency', form)
+  const isCrossCurrency = !!wCashCurrency && wCashCurrency !== wCurrency
+  const rateToCny = (cur) => (cur === 'CNY' || !rate ? 1 : cur === 'USD' ? rate : rate / 7.8)
+  const crossRate = (from, to) => (from && to && from !== to && rate
+    ? rateToCny(from) / rateToCny(to) : null)
   const conv = (amount, srcCur) => {
     const result = convertAmount(amount, srcCur, displayCurrency, rate)
     return result != null
@@ -127,7 +134,9 @@ export default function PlatformDetail() {
     setEditing(null)
     setMode('derived')
     form.resetFields()
-    form.setFieldsValue({ currency: 'CNY', asset_type: 'stock', market: 'A', date: dayjs() })
+    form.setFieldsValue({
+      currency: 'CNY', asset_type: 'stock', market: 'A', cash_currency: null, fx_rate: null, date: dayjs(),
+    })
     setOpen(true)
   }
   const openEdit = (r) => {
@@ -149,10 +158,14 @@ export default function PlatformDetail() {
         await updateHolding(editing.id, patch)
       } else if (mode === 'derived') {
         // 按交易记录：记一笔买入，后端自动建/更新 derived 持仓
+        const cashCurrency = values.cash_currency && values.cash_currency !== values.currency
+          ? values.cash_currency : null
         await createTransaction({
           platform_id: platformId, action: 'buy',
           date: values.date ? values.date.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
           name: values.name, symbol: values.symbol, currency: values.currency,
+          cash_currency: cashCurrency,
+          fx_rate: cashCurrency ? (values.fx_rate ?? null) : null,
           quantity: values.quantity, price: values.price, fee: values.fee,
         })
       } else {
@@ -753,7 +766,18 @@ export default function PlatformDetail() {
           <Row gutter={8}>
             <Col xs={24} md={8}>
               <Form.Item name="currency" label="币种" rules={[{ required: true }]}>
-                <Select options={CURRENCIES} />
+                <Select
+                  options={CURRENCIES}
+                  onChange={(v) => {
+                    const cc = form.getFieldValue('cash_currency')
+                    if (!cc) return
+                    if (cc === v) form.setFieldsValue({ cash_currency: null, fx_rate: null })
+                    else {
+                      const r = crossRate(v, cc)
+                      form.setFieldsValue({ fx_rate: r != null ? Number(r.toFixed(6)) : null })
+                    }
+                  }}
+                />
               </Form.Item>
             </Col>
             <Col xs={24} md={8}>
@@ -774,6 +798,43 @@ export default function PlatformDetail() {
             <Input placeholder="行情代码" />
           </Form.Item>
           {(mode === 'derived' && !editing) ? (
+            <>
+            <Row gutter={8}>
+              <Col xs={24} md={8}>
+                <Form.Item
+                  name="cash_currency"
+                  label="结算币种（可选）"
+                  extra={isCrossCurrency
+                    ? `按 ${wCurrency} 计价，现金按 ${wCashCurrency} 收付`
+                    : '港股通：港股用港币计价、人民币结算时选 CNY'}
+                >
+                  <Select
+                    allowClear
+                    placeholder={`默认 ${wCurrency || '同计价币种'}`}
+                    options={CURRENCIES}
+                    onChange={(v) => {
+                      if (!v || v === form.getFieldValue('currency')) {
+                        form.setFieldsValue({ fx_rate: null })
+                      } else {
+                        const r = crossRate(form.getFieldValue('currency'), v)
+                        form.setFieldsValue({ fx_rate: r != null ? Number(r.toFixed(6)) : null })
+                      }
+                    }}
+                  />
+                </Form.Item>
+              </Col>
+              {isCrossCurrency && (
+                <Col xs={24} md={8}>
+                  <Form.Item
+                    name="fx_rate"
+                    label={`结算汇率（1 ${wCurrency} = ? ${wCashCurrency}）`}
+                    extra="留空按当前汇率估算"
+                  >
+                    <InputNumber min={0} step={0.0001} style={{ width: '100%' }} placeholder="如 0.9200" />
+                  </Form.Item>
+                </Col>
+              )}
+            </Row>
             <Row gutter={8}>
               <Col xs={24} md={6}>
                 <Form.Item name="date" label="买入日期" rules={[{ required: true }]}>
@@ -796,6 +857,7 @@ export default function PlatformDetail() {
                 </Form.Item>
               </Col>
             </Row>
+            </>
           ) : (
             <Row gutter={8}>
               <Col xs={24} md={12}>

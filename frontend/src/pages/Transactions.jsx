@@ -2,19 +2,19 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import {
   Button, Card, Collapse, DatePicker, Drawer, Empty, Form, Grid, Input, InputNumber, Modal, Pagination, Popconfirm,
-  Radio, Select, Space, Spin, Steps, Table, Tag, Typography, Upload, message,
+  Radio, Select, Space, Spin, Steps, Table, Tag, Tooltip, Typography, Upload, message,
 } from 'antd'
 import { InboxOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
   listTransactions, createTransaction, updateTransaction, deleteTransaction,
   listPlatforms, listHoldings, listCash, previewTransactionImport, commitTransactionImport,
-  previewImport, commitImport, getImportReconciliation, getImportDetail,
+  previewImport, commitImport, getImportReconciliation, getImportDetail, getRate,
 } from '../api'
 import {
   CURRENCIES, TXN_ACTIONS, TXN_ACTION_LABEL, CURRENCY_SYMBOL, fmt,
 } from '../constants'
-import { cashFlow, projectedBalance, holdingStatus, projectedQuantity } from '../cash'
+import { cashFlow, projectedBalance, holdingStatus, projectedQuantity, settleCurrency } from '../cash'
 import { useColorScheme } from '../colorScheme.jsx'
 
 const ACTION_COLOR = {
@@ -37,8 +37,9 @@ const txnAmount = (t) => {
 const qtyText = (n) => (n == null ? '—' : Number(n).toLocaleString('zh-CN', { maximumFractionDigits: 4 }))
 
 const CSV_TEMPLATE = [
-  'date,action,name,symbol,platform,currency,quantity,price,fee,amount,note',
-  '2026-01-01,buy,Apple,AAPL,富途,USD,100,150.00,3.5,,首次买入',
+  'date,action,name,symbol,platform,currency,cash_currency,fx_rate,quantity,price,fee,amount,note',
+  '2026-01-01,buy,Apple,AAPL,富途,USD,,,100,150.00,3.5,,首次买入',
+  '2026-01-02,buy,腾讯控股,00700,国信金证,HKD,CNY,0.92,200,410.20,0,,港股通人民币结算',
 ].join('\n')
 
 export default function Transactions() {
@@ -62,6 +63,7 @@ export default function Transactions() {
   const [holdingsLoading, setHoldingsLoading] = useState(false)
   const [holdingsError, setHoldingsError] = useState(false)
   const [cashAccounts, setCashAccounts] = useState([])
+  const [usdcny, setUsdcny] = useState(null)
 
   const platName = useMemo(
     () => Object.fromEntries(platforms.map((p) => [p.id, p.name])),
@@ -80,6 +82,8 @@ export default function Transactions() {
   const wPlatformId = Form.useWatch('platform_id', form)
   const wSymbol = Form.useWatch('symbol', form)
   const wCurrency = Form.useWatch('currency', form)
+  const wCashCurrency = Form.useWatch('cash_currency', form)
+  const wFxRate = Form.useWatch('fx_rate', form)
   const wQuantity = Form.useWatch('quantity', form)
   const wPrice = Form.useWatch('price', form)
   const wFee = Form.useWatch('fee', form)
@@ -88,11 +92,21 @@ export default function Transactions() {
   const hs = holdingStatus(holdings, { platform_id: wPlatformId, symbol: wSymbol, currency: wCurrency })
   const currentQty = hs.kind === 'known' ? hs.quantity : null
   const projQty = projectedQuantity(selectedAction, currentQty, wQuantity)
-  const flow = cashFlow({ action: selectedAction, quantity: wQuantity, price: wPrice, fee: wFee, amount: wAmount })
-  const cashAcct = cashAccounts.find((c) => c.platform_id === wPlatformId && c.currency === wCurrency)
+  const supportsSettlement = isTrade || selectedAction === 'dividend'
+  const cashCur = supportsSettlement ? (wCashCurrency || wCurrency) : wCurrency
+  const isCrossCurrency = supportsSettlement && !!wCashCurrency && wCashCurrency !== wCurrency
+  // 跨币种结算默认汇率：与后端 fx_utils 一致（HKD 按 7.8 HKD/USD 近似）
+  const rateToCny = (cur) => (cur === 'CNY' || !usdcny ? 1 : cur === 'USD' ? usdcny : usdcny / 7.8)
+  const crossRate = (from, to) => (from && to && from !== to && usdcny
+    ? rateToCny(from) / rateToCny(to) : null)
+  const flow = cashFlow({
+    action: selectedAction, quantity: wQuantity, price: wPrice, fee: wFee, amount: wAmount,
+    currency: wCurrency, cash_currency: wCashCurrency, fx_rate: wFxRate,
+  })
+  const cashAcct = cashAccounts.find((c) => c.platform_id === wPlatformId && c.currency === cashCur)
   const cashBalance = cashAcct?.initialized ? cashAcct.balance : null
   const projBalance = projectedBalance(cashBalance, flow)
-  const sym = CURRENCY_SYMBOL[wCurrency] || ''
+  const sym = CURRENCY_SYMBOL[cashCur] || ''
   const showCashBlock = flow != null && (
     isTrade ? (wAmount != null || (wQuantity != null && wPrice != null))
       : ['deposit', 'withdraw', 'dividend'].includes(selectedAction) ? wAmount != null
@@ -171,6 +185,9 @@ export default function Transactions() {
   }
 
   useEffect(() => { load(); loadRefs() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    getRate().then((r) => setUsdcny(r?.rate ?? null)).catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (location.state?.openAdd) {
@@ -200,7 +217,7 @@ export default function Transactions() {
   const openAdd = () => {
     setEditing(null)
     form.resetFields()
-    form.setFieldsValue({ action: 'buy', currency: 'CNY', date: dayjs() })
+    form.setFieldsValue({ action: 'buy', currency: 'CNY', cash_currency: null, fx_rate: null, date: dayjs() })
     setOpen(true)
   }
   const openEdit = (r) => {
@@ -227,6 +244,12 @@ export default function Transactions() {
       payload.quantity = null
       payload.price = null
       payload.fee = null
+    }
+    // 结算币种只对买卖/分红有效；与计价币种相同时按旧口径处理
+    if (!['buy', 'sell', 'dividend'].includes(payload.action)
+        || !payload.cash_currency || payload.cash_currency === payload.currency) {
+      payload.cash_currency = null
+      payload.fx_rate = null
     }
     setSaving(true)
     try {
@@ -397,7 +420,18 @@ export default function Transactions() {
   const reconColumns = [
     { title: '代码', dataIndex: 'symbol', width: 100 },
     { title: '名称', dataIndex: 'name' },
-    { title: '币种', dataIndex: 'currency', width: 60 },
+    {
+      title: '币种', dataIndex: 'currency', width: 90,
+      render: (v, r) => {
+        const cashCur = settleCurrency(r)
+        if (cashCur === v) return v
+        return (
+          <Tooltip title={`${v} 计价，现金按 ${cashCur} 结算${r.fx_rate ? `（1 ${v} = ${r.fx_rate} ${cashCur}）` : ''}`}>
+            <span>{v}→{cashCur}</span>
+          </Tooltip>
+        )
+      },
+    },
     {
       title: '券商数量', dataIndex: 'broker_quantity', align: 'right',
       render: (v) => v != null ? fmt(v) : '—',
@@ -609,9 +643,57 @@ export default function Transactions() {
               <Select options={TXN_ACTIONS} />
             </Form.Item>
             <Form.Item name="currency" label="币种" rules={[{ required: true }]} style={{ flex: 1 }}>
-              <Select options={CURRENCIES} />
+              <Select
+                options={CURRENCIES}
+                onChange={(v) => {
+                  const cc = form.getFieldValue('cash_currency')
+                  if (!cc) return
+                  if (cc === v) form.setFieldsValue({ cash_currency: null, fx_rate: null })
+                  else {
+                    const rate = crossRate(v, cc)
+                    form.setFieldsValue({ fx_rate: rate != null ? Number(rate.toFixed(6)) : null })
+                  }
+                }}
+              />
             </Form.Item>
           </Space>
+
+          {supportsSettlement && (
+            <Space className="mobile-form-row" style={{ display: 'flex' }} align="start">
+              <Form.Item
+                name="cash_currency"
+                label="结算币种（可选）"
+                style={{ flex: 1 }}
+                extra={isCrossCurrency
+                  ? `按 ${wCurrency} 计价，现金按 ${cashCur} 收付`
+                  : '港股通：港股用港币计价、人民币结算时选 CNY'}
+              >
+                <Select
+                  allowClear
+                  placeholder={`默认 ${wCurrency || '同计价币种'}`}
+                  options={CURRENCIES}
+                  onChange={(v) => {
+                    if (!v || v === form.getFieldValue('currency')) {
+                      form.setFieldsValue({ fx_rate: null })
+                    } else {
+                      const rate = crossRate(form.getFieldValue('currency'), v)
+                      form.setFieldsValue({ fx_rate: rate != null ? Number(rate.toFixed(6)) : null })
+                    }
+                  }}
+                />
+              </Form.Item>
+              {isCrossCurrency && (
+                <Form.Item
+                  name="fx_rate"
+                  label={`结算汇率（1 ${wCurrency} = ? ${cashCur}）`}
+                  style={{ flex: 1 }}
+                  extra="留空按当前汇率估算"
+                >
+                  <InputNumber min={0} step={0.0001} style={{ width: '100%' }} placeholder="如 0.9200" />
+                </Form.Item>
+              )}
+            </Space>
+          )}
 
           {isTrade && (
             <Form.Item label="选择已有持仓（可选）">
@@ -685,15 +767,19 @@ export default function Transactions() {
           {showsAmount && (
             <Form.Item
               name="amount"
-              label={isCashAdjust ? '现金余额（绝对余额）' : ['deposit', 'withdraw', 'dividend'].includes(selectedAction) ? '金额' : '金额（可选，留空按 量×价±费 估算）'}
+              label={isCashAdjust ? '现金余额（绝对余额）'
+                : ['deposit', 'withdraw', 'dividend'].includes(selectedAction)
+                  ? `金额${isCrossCurrency ? `（${cashCur}）` : ''}`
+                  : `金额（可选${isCrossCurrency ? `，${cashCur} 实际结算额` : ''}，留空按 量×价±费${isCrossCurrency ? '×汇率' : ''} 估算）`}
               rules={amountRequired ? [{ required: true, message: '请填写金额' }] : []}
             >
               <InputNumber min={0} style={{ width: '100%' }} placeholder={
                 isCashAdjust ? '该时点现金余额'
                   : selectedAction === 'deposit' ? '入金金额'
                     : selectedAction === 'withdraw' ? '出金金额'
-                      : selectedAction === 'dividend' ? '分红/利息金额'
-                        : '留空则按 量×价±费 自动估算'
+                      : selectedAction === 'dividend' ? `分红/利息金额${isCrossCurrency ? `（${cashCur}）` : ''}`
+                        : isCrossCurrency ? `券商实际扣款 ${cashCur}，留空按汇率估算`
+                          : '留空则按 量×价±费 自动估算'
               } />
             </Form.Item>
           )}
@@ -705,6 +791,9 @@ export default function Transactions() {
                 <b style={{ color: flow > 0 ? upColor : flow < 0 ? downColor : '#333', fontSize: 15 }}>
                   {flow > 0 ? '+' : ''}{fmt(flow)} {sym}
                 </b>
+                {isCrossCurrency && !wFxRate && !wAmount && (
+                  <span style={{ color: '#fa8c16', fontSize: 12, marginLeft: 8 }}>汇率以保存时为准</span>
+                )}
               </div>
               {cashAcct ? (
                 cashBalance != null ? (
@@ -968,13 +1057,15 @@ export default function Transactions() {
         <div style={{ background: '#f9f9f9', padding: 12, borderRadius: 6, marginBottom: 12 }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>CSV 格式说明</div>
           <div style={{ fontSize: 12, fontFamily: 'monospace', color: '#444', wordBreak: 'break-all' }}>
-            date, action, name, symbol, platform, currency, quantity, price, fee, amount, note
+            date, action, name, symbol, platform, currency, cash_currency, fx_rate, quantity, price, fee, amount, note
           </div>
           <div style={{ fontSize: 12, color: '#888', marginTop: 6, lineHeight: 1.6 }}>
             <b>date</b>：YYYY-MM-DD &nbsp;·&nbsp;
             <b>action</b>：buy / sell / adjust（持仓校准） / dividend / deposit / withdraw / other &nbsp;·&nbsp;
             <b>platform</b>：需与账户名称完全匹配，可留空 &nbsp;·&nbsp;
-            <b>currency</b>：CNY / USD / HKD，默认 CNY &nbsp;·&nbsp;
+            <b>currency</b>：CNY / USD / HKD（计价/持仓币种），默认 CNY &nbsp;·&nbsp;
+            <b>cash_currency</b>：结算币种（可留空；港股通填 CNY） &nbsp;·&nbsp;
+            <b>fx_rate</b>：1 计价币种 = ? 结算币种，可留空 &nbsp;·&nbsp;
             数字字段可留空
           </div>
           <Button size="small" style={{ marginTop: 8 }} onClick={downloadTemplate}>

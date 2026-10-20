@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from auth import get_current_user
-from cash_service import CASH_ACTIONS, cash_ledger, replay_cash
+from cash_service import CASH_ACTIONS, cash_ledger, cash_transactions, replay_cash, settlement_currency
 from database import get_session
 from decimal_utils import to_float
 from models import Currency, Platform, Transaction, User
@@ -41,7 +41,7 @@ def list_cash(
     for t in txns:
         if t.platform_id is None:
             continue
-        groups.setdefault((t.platform_id, t.currency), []).append(t)
+        groups.setdefault((t.platform_id, settlement_currency(t)), []).append(t)
 
     result = []
     for (pid, cur), t_list in groups.items():
@@ -72,12 +72,7 @@ def get_cash_ledger(
     if not platform or platform.user_id != user.id:
         raise HTTPException(404, "平台不存在")
 
-    txns = session.exec(select(Transaction).where(
-        Transaction.user_id == user.id,
-        Transaction.platform_id == platform_id,
-        Transaction.currency == currency,
-        Transaction.action.in_(CASH_ACTIONS),
-    )).all()
+    txns = cash_transactions(session, user.id, platform_id, currency)
 
     st = replay_cash(txns)
     return {

@@ -101,7 +101,11 @@ def _migrate_add_user_id() -> None:
         "snapshot": {"user_id": "INTEGER", "day": "VARCHAR"},
         "dailypnl": {"details_json": "TEXT DEFAULT '[]'"},
         "automationrun": {"user_id": "INTEGER"},
-        "transaction": {"holding_id": "INTEGER"},
+        "transaction": {
+            "holding_id": "INTEGER",
+            "cash_currency": "VARCHAR",
+            "fx_rate": "FLOAT",
+        },
         "importsession": {
             "platform_id": "INTEGER",
             "broker_type": "VARCHAR DEFAULT ''",

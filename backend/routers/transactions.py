@@ -9,8 +9,12 @@ from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from auth import get_current_user
-from cash_service import CASH_ACTIONS, check_cash, recalc_cash, replay_cash
+from cash_service import (
+    CASH_ACTIONS, cash_transactions, check_cash, recalc_cash, replay_cash,
+    settlement_currency,
+)
 from database import get_session
+from fx_utils import rate_between
 from models import (
     Currency,
     Holding,
@@ -110,11 +114,29 @@ def _sync_txn_holding(session: Session, txn: Transaction, user: User) -> None:
             txn.holding_id = None
             session.add(txn)
             session.flush()
-    # 卖出自动进入现金账本；现金相关动作统一重算。
+    # 卖出自动进入现金账本；现金相关动作按结算币种统一重算。
     if txn.action in CASH_ACTIONS and txn.platform_id is not None and txn.currency is not None:
-        recalc_cash(session, user, txn.platform_id, txn.currency)
+        recalc_cash(session, user, txn.platform_id, settlement_currency(txn))
     for hid in affected:
         recompute_holding(session, hid)
+
+
+def _normalize_settlement(session: Session, txn: Transaction) -> None:
+    """规范结算币种：仅买卖/分红可用；同币种清空；缺汇率时按缓存汇率折算并存档。
+
+    港股通：currency=HKD（报价/持仓），cash_currency=CNY（现金收付），
+    fx_rate 表示 1 HKD 折合多少 CNY。
+    """
+    if txn.action not in (TxnAction.buy, TxnAction.sell, TxnAction.dividend):
+        txn.cash_currency = None
+        txn.fx_rate = None
+        return
+    if txn.cash_currency is None or txn.cash_currency == txn.currency:
+        txn.cash_currency = None
+        txn.fx_rate = None
+        return
+    if txn.fx_rate is None:
+        txn.fx_rate = round(rate_between(session, txn.currency, txn.cash_currency), 10)
 
 
 # ─── CSV import helpers ───────────────────────────────────────────────────────
@@ -174,6 +196,25 @@ def _validate_row(row_num: int, row: dict, plat_map: dict) -> tuple:
         d["currency"] = Currency(cur_str)
     except ValueError:
         errors.append(f"currency 无效：{cur_str}，可选：CNY/USD/HKD")
+
+    # cash_currency（结算币种，可选；港股通填 CNY）
+    cash_str = (row.get("cash_currency") or "").strip().upper()
+    if cash_str:
+        try:
+            d["cash_currency"] = Currency(cash_str)
+        except ValueError:
+            errors.append(f"cash_currency 无效：{cash_str}，可选：CNY/USD/HKD")
+    else:
+        d["cash_currency"] = None
+
+    fx_str = (row.get("fx_rate") or "").strip()
+    if fx_str:
+        try:
+            d["fx_rate"] = float(fx_str)
+        except ValueError:
+            errors.append(f"fx_rate 不是有效数字：{fx_str}")
+    else:
+        d["fx_rate"] = None
 
     # 文本字段
     d["name"] = (row.get("name") or "").strip()
@@ -316,22 +357,25 @@ def create_transaction(
     user: User = Depends(get_current_user),
 ):
     _check_platform(session, data.platform_id, user)
+    txn = Transaction.model_validate(data, update={"user_id": user.id})
+    txn.holding_id = None  # always system-resolved; never trust client input
+    _normalize_settlement(session, txn)
     # 统一校验
     validate_transaction(
         session, user,
-        action=data.action,
-        platform_id=data.platform_id,
-        currency=data.currency,
-        symbol=data.symbol,
-        name=data.name,
-        quantity=data.quantity,
-        price=data.price,
-        fee=data.fee,
-        amount=data.amount,
-        date=data.date,
+        action=txn.action,
+        platform_id=txn.platform_id,
+        currency=txn.currency,
+        cash_currency=txn.cash_currency,
+        fx_rate=txn.fx_rate,
+        symbol=txn.symbol,
+        name=txn.name,
+        quantity=txn.quantity,
+        price=txn.price,
+        fee=txn.fee,
+        amount=txn.amount,
+        date=txn.date,
     )
-    txn = Transaction.model_validate(data, update={"user_id": user.id})
-    txn.holding_id = None  # always system-resolved; never trust client input
     _check_oversell(session, user, txn)  # 禁止超卖
     check_cash(session, user, txn)  # 现金时间线校验：出金/买入不能导致负余额
     prepare_position(session, user, txn)
@@ -409,25 +453,28 @@ async def commit_import(
     imported = 0
     for d in all_data:
         tc = TransactionCreate(**d)
+        txn = Transaction.model_validate(tc, update={"user_id": user.id})
+        txn.holding_id = None
+        _normalize_settlement(session, txn)
         # 统一校验
         try:
             validate_transaction(
                 session, user,
-                action=tc.action,
-                platform_id=tc.platform_id,
-                currency=tc.currency,
-                symbol=tc.symbol,
-                name=tc.name,
-                quantity=tc.quantity,
-                price=tc.price,
-                fee=tc.fee,
-                amount=tc.amount,
-                date=tc.date,
+                action=txn.action,
+                platform_id=txn.platform_id,
+                currency=txn.currency,
+                cash_currency=txn.cash_currency,
+                fx_rate=txn.fx_rate,
+                symbol=txn.symbol,
+                name=txn.name,
+                quantity=txn.quantity,
+                price=txn.price,
+                fee=txn.fee,
+                amount=txn.amount,
+                date=txn.date,
             )
         except HTTPException:
             raise  # 向上传播校验错误
-        txn = Transaction.model_validate(tc, update={"user_id": user.id})
-        txn.holding_id = None
         _check_oversell(session, user, txn)  # CSV 导入也禁止超卖
         check_cash(session, user, txn)  # 现金时间线校验
         prepare_position(session, user, txn)
@@ -449,7 +496,7 @@ def update_transaction(
 ):
     txn = _owned(session, txn_id, user)
     old_platform_id = txn.platform_id
-    old_currency = txn.currency
+    old_cash_currency = settlement_currency(txn)
     old_action = txn.action
     previous_txn = txn.model_copy()
     values = data.model_dump(exclude_unset=True)
@@ -458,6 +505,8 @@ def update_transaction(
         _check_platform(session, values["platform_id"], user)
     for key, value in values.items():
         setattr(txn, key, value)
+    _normalize_settlement(session, txn)
+    new_cash_currency = settlement_currency(txn)
 
     # 统一校验（合并后的字段）
     validate_transaction(
@@ -465,6 +514,8 @@ def update_transaction(
         action=txn.action,
         platform_id=txn.platform_id,
         currency=txn.currency,
+        cash_currency=txn.cash_currency,
+        fx_rate=txn.fx_rate,
         symbol=txn.symbol,
         name=txn.name,
         quantity=txn.quantity,
@@ -482,19 +533,15 @@ def update_transaction(
     _sync_txn_holding(session, txn, user)
     # 移出旧现金账户或改成非现金动作时，撤销旧现金影响并验证余额。
     if (old_action in CASH_ACTIONS
-            and ((old_platform_id, old_currency) != (txn.platform_id, txn.currency)
+            and ((old_platform_id, old_cash_currency) != (txn.platform_id, new_cash_currency)
                  or txn.action not in CASH_ACTIONS)
-            and old_platform_id is not None and old_currency is not None):
+            and old_platform_id is not None and old_cash_currency is not None):
         with session.no_autoflush:
-            old_cash_txns = session.exec(select(Transaction).where(
-                Transaction.user_id == user.id,
-                Transaction.platform_id == old_platform_id,
-                Transaction.currency == old_currency,
-                Transaction.action.in_(CASH_ACTIONS),
-                Transaction.id != txn_id,
-            )).all()
+            old_cash_txns = cash_transactions(
+                session, user.id, old_platform_id, old_cash_currency, exclude_txn_id=txn_id,
+            )
         replay_cash(old_cash_txns, check_negative=True, previous_txns=[*old_cash_txns, previous_txn])
-        recalc_cash(session, user, old_platform_id, old_currency)
+        recalc_cash(session, user, old_platform_id, old_cash_currency)
     session.commit()
     session.refresh(txn)
     return txn
@@ -510,7 +557,7 @@ def delete_transaction(
     holding_id = txn.holding_id
     action = txn.action
     platform_id = txn.platform_id
-    currency = txn.currency
+    currency = settlement_currency(txn)
     if holding_id is not None:
         remaining = session.exec(select(Transaction).where(
             Transaction.holding_id == holding_id, Transaction.id != txn_id,
@@ -519,13 +566,9 @@ def delete_transaction(
     # 现金时间线校验：删除后（剔除自身）任一中间时点负余额即拒绝
     if action in CASH_ACTIONS and platform_id is not None and currency is not None:
         with session.no_autoflush:
-            remaining_cash = session.exec(select(Transaction).where(
-                Transaction.user_id == user.id,
-                Transaction.platform_id == platform_id,
-                Transaction.currency == currency,
-                Transaction.action.in_(CASH_ACTIONS),
-                Transaction.id != txn_id,
-            )).all()
+            remaining_cash = cash_transactions(
+                session, user.id, platform_id, currency, exclude_txn_id=txn_id,
+            )
         replay_cash(remaining_cash, check_negative=True, previous_txns=[*remaining_cash, txn])
     session.delete(txn)
     session.flush()

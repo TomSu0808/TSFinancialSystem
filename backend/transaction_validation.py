@@ -22,6 +22,8 @@ def validate_transaction(
     action: TxnAction,
     platform_id: Optional[int],
     currency: Optional[Currency],
+    cash_currency: Optional[Currency] = None,
+    fx_rate: Optional[float] = None,
     symbol: Optional[str] = None,
     name: Optional[str] = None,
     quantity: Optional[float] = None,
@@ -112,6 +114,18 @@ def validate_transaction(
             errors.append("分红/利息必须指定平台")
         if not currency:
             errors.append("分红/利息必须指定币种")
+
+    # ── 结算币种（港股通等跨币种收付）──
+    if cash_currency is not None:
+        if action not in (TxnAction.buy, TxnAction.sell, TxnAction.dividend):
+            errors.append("仅买入、卖出和分红支持结算币种")
+        if currency is not None and cash_currency == currency:
+            errors.append("结算币种与计价币种相同，请留空")
+    if fx_rate is not None:
+        if not math.isfinite(fx_rate) or fx_rate <= 0:
+            errors.append("结算汇率必须是正数")
+        if cash_currency is None and currency is not None:
+            errors.append("填写结算汇率时必须同时选择结算币种")
 
     # ── 数值防负 ──
     if quantity is not None and quantity < 0:

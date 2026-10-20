@@ -170,11 +170,13 @@ class Transaction(SQLModel, table=True):
     action: TxnAction = TxnAction.buy
     name: str = ""
     symbol: str = ""
-    currency: Currency = Currency.CNY
+    currency: Currency = Currency.CNY      # 计价/持仓币种（港股为 HKD）
+    cash_currency: Optional[Currency] = None  # 结算币种；空表示与 currency 相同（港股通用 CNY）
+    fx_rate: Optional[float] = None       # 1 currency = ? cash_currency；跨币种买卖/分红用
     quantity: Optional[float] = None
     price: Optional[float] = None
     fee: Optional[float] = None
-    amount: Optional[float] = None        # 现金流总额（可手填，否则前端按 量×价±费 估算展示）
+    amount: Optional[float] = None        # 现金流总额（结算币种；可手填，否则按 量×价±费×汇率 估算）
     note: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -318,6 +320,8 @@ class TransactionCreate(SQLModel):
     name: str = ""
     symbol: str = ""
     currency: Currency = Currency.CNY
+    cash_currency: Optional[Currency] = None
+    fx_rate: Optional[float] = None
     quantity: Optional[float] = None
     price: Optional[float] = None
     fee: Optional[float] = None
@@ -333,6 +337,8 @@ class TransactionUpdate(SQLModel):
     name: Optional[str] = None
     symbol: Optional[str] = None
     currency: Optional[Currency] = None
+    cash_currency: Optional[Currency] = None
+    fx_rate: Optional[float] = None
     quantity: Optional[float] = None
     price: Optional[float] = None
     fee: Optional[float] = None
