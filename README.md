@@ -43,7 +43,7 @@ The hosted version supports registration, login, HTTPS, and isolated multi-user 
 | Multi-account tracking | Manage assets by broker, bank, wallet, or custom account, such as Futu, IBKR, Tiger, bank cards, and crypto wallets. |
 | Multi-currency overview | Track CNY, USD, HKD, and more; switch between CNY / USD on the Dashboard, account list, and account detail, with a saved display preference. |
 | Transaction-driven holdings | Buy, sell, and dividend transactions update derived holdings, weighted-average cost, realized P&L, and closed-position status. |
-| Dashboard | Review total assets, daily change, total return, unrealized / realized P&L, allocation, net-worth charts, and data status. |
+| Dashboard | Review total assets, daily change, total return, unrealized / realized P&L, allocation, net-worth charts, and data status. Daily P&L uses per-position prior-day baselines, so a new or unpriceable holding does not invalidate otherwise comparable positions. |
 | Market and FX refresh | Refresh A-share, HK, US, fund, crypto, and USD/CNY FX data; creating, editing, deleting, or importing transactions automatically refreshes market quotes. |
 | CSV import and reconciliation | Import Futu, IBKR, or generic CSV files with preview validation, deduplication, commit, and reconciliation. |
 | Cash ledger | Track cash per account and currency; net sale proceeds remain in the account, while withdrawals reduce cash separately. Includes calibration, ledger history, and overdraft checks. |

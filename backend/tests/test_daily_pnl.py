@@ -65,7 +65,7 @@ def test_closed_position_preserves_daily_realized_profit_and_income(session, use
 
 
 def test_price_gaps_and_stale_are_not_zero_profit(session, user):
-    """价格缺失会重建基准（而不是误报为零），行情过期则标 stale。"""
+    """唯一持仓缺价时标数据不足（不误报零），行情过期则标 stale。"""
     now = datetime(2026, 9, 10, 23, 55)
     h = seed(session, user, now)
     record_daily_pnl(session, user.id, now)
@@ -73,7 +73,7 @@ def test_price_gaps_and_stale_are_not_zero_profit(session, user):
     h.current_price = None
     session.add(h)
     session.commit()
-    assert record_daily_pnl(session, user.id, tomorrow).status == "adjusted"
+    assert record_daily_pnl(session, user.id, tomorrow).status == "missing"
     advance(session, h, tomorrow)
     assert record_daily_pnl(session, user.id, tomorrow).pnl_usd == 50
     later = now + timedelta(days=3)

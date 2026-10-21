@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from sqlmodel import select
 
 from daily_pnl_service import record_daily_pnl
-from models import Currency, DailyPnl, FxRate, Holding, Platform, User
+from models import Currency, DailyPnl, FxRate, Holding, Platform, Transaction, User
 
 
 def _platform(session, user, name):
@@ -169,8 +169,363 @@ def test_detail_excluded_position_reason(client, session, user):
     p_missing = next(p for p in body["positions"] if p["symbol"] == "MISS")
     assert p_missing["excluded"] is True
     assert p_missing["status"] == "excluded"
-    assert p_missing["pnl"] == 0        # 缺价/成本：未实现不计入，已实现+分红差为 0
+    assert p_missing["pnl"] == 0        # 缺价/成本：未实现不计入，分红/利息差为 0
     assert "缺价格或成本" in (p_missing["reason"] or "")
+
+
+def test_new_position_from_today_trade_does_not_rebaseline_existing_positions(client, session, user):
+    """当天正常买入的新持仓无昨日基准，但不应让已有持仓和整日盈亏失效。"""
+    now = datetime(2026, 9, 10, 23, 55)
+    _fx(session, now, rate=7.0)
+    platform = _platform(session, user, "Broker")
+    existing = _holding(
+        session, user, platform, symbol="OLD", currency="USD", quantity=10,
+        cost_price=100, current_price=110, price_updated_at=now, source="derived",
+    )
+    record_daily_pnl(session, user.id, now)
+
+    tomorrow = now + timedelta(days=1)
+    existing.current_price = 115
+    existing.price_updated_at = tomorrow
+    new_holding = _holding(
+        session, user, platform, symbol="NEW", currency="USD", quantity=5,
+        cost_price=100, current_price=110, price_updated_at=tomorrow, source="derived",
+    )
+    session.add(existing)
+    session.add(Transaction(
+        user_id=user.id, platform_id=platform.id, holding_id=new_holding.id,
+        date=tomorrow.date().isoformat(), action="buy", symbol="NEW",
+        currency="USD", quantity=5, price=100,
+    ))
+    session.commit()
+
+    row = record_daily_pnl(session, user.id, tomorrow)
+    assert row.status == "recorded"
+    assert row.pnl_usd == 50
+
+    body = client.get(
+        f"/api/snapshots/daily-pnl/{tomorrow.date().isoformat()}",
+        params={"currency": "USD"},
+    ).json()
+    by_symbol = {p["symbol"]: p for p in body["positions"]}
+    assert by_symbol["OLD"]["pnl"] == 50
+    assert by_symbol["NEW"]["pnl"] is None
+    assert by_symbol["NEW"]["status"] == "no_baseline"
+    assert "新增持仓" in by_symbol["NEW"]["reason"]
+
+
+def test_position_becoming_unpriceable_does_not_rebaseline_other_positions(client, session, user):
+    """单个持仓当天缺价/成本时，只排除该持仓，其余持仓继续输出。"""
+    now = datetime(2026, 9, 10, 23, 55)
+    _fx(session, now, rate=7.0)
+    platform = _platform(session, user, "Broker")
+    good = _holding(
+        session, user, platform, symbol="GOOD", currency="USD", quantity=10,
+        cost_price=100, current_price=110, price_updated_at=now,
+    )
+    missing = _holding(
+        session, user, platform, symbol="MISS", currency="USD", quantity=5,
+        cost_price=100, current_price=110, price_updated_at=now,
+    )
+    record_daily_pnl(session, user.id, now)
+
+    tomorrow = now + timedelta(days=1)
+    good.current_price = 115
+    good.price_updated_at = tomorrow
+    missing.current_price = None
+    missing.price_updated_at = tomorrow
+    session.add(good)
+    session.add(missing)
+    session.commit()
+
+    row = record_daily_pnl(session, user.id, tomorrow)
+    assert row.status == "recorded"
+    assert row.pnl_usd == 50
+
+    body = client.get(
+        f"/api/snapshots/daily-pnl/{tomorrow.date().isoformat()}",
+        params={"currency": "USD"},
+    ).json()
+    by_symbol = {p["symbol"]: p for p in body["positions"]}
+    assert by_symbol["GOOD"]["pnl"] == 50
+    assert by_symbol["MISS"]["pnl"] == 0
+    assert by_symbol["MISS"]["status"] == "excluded"
+    assert "缺价格或成本" in by_symbol["MISS"]["reason"]
+
+
+def test_unpriceable_position_keeps_known_income(client, session, user):
+    """失去行情时只排除无法确认的价格与卖出部分，分红/利息仍计入。"""
+    now = datetime(2026, 9, 10, 23, 55)
+    _fx(session, now, rate=7.0)
+    platform = _platform(session, user, "Broker")
+    good = _holding(
+        session, user, platform, symbol="GOOD", currency="USD", quantity=10,
+        cost_price=100, current_price=110, price_updated_at=now,
+    )
+    missing = _holding(
+        session, user, platform, symbol="MISS", currency="USD", quantity=5,
+        cost_price=100, current_price=110, price_updated_at=now, source="derived",
+    )
+    record_daily_pnl(session, user.id, now)
+
+    tomorrow = now + timedelta(days=1)
+    good.current_price = 115
+    good.price_updated_at = tomorrow
+    missing.current_price = None
+    missing.realized_income = 10
+    missing.price_updated_at = tomorrow
+    session.add(good)
+    session.add(missing)
+    session.commit()
+
+    row = record_daily_pnl(session, user.id, tomorrow)
+    assert row.status == "recorded"
+    assert row.pnl_usd == 60
+    details = json.loads(row.details_json)
+    missing_detail = next(d for d in details if d["symbol"] == "MISS")
+    assert missing_detail["status"] == "excluded"
+    assert missing_detail["pnl_usd"] == 10
+
+
+def test_unpriceable_position_does_not_double_count_realized_sale_profit(session, user):
+    """缺行情时卖出收益可能来自昨日未实现收益，不能直接重复计入当日。"""
+    now = datetime(2026, 9, 10, 23, 55)
+    _fx(session, now, rate=7.0)
+    platform = _platform(session, user, "Broker")
+    good = _holding(
+        session, user, platform, symbol="GOOD", currency="USD", quantity=10,
+        cost_price=100, current_price=110, price_updated_at=now,
+    )
+    sold = _holding(
+        session, user, platform, symbol="SOLD", currency="USD", quantity=5,
+        cost_price=100, current_price=110, price_updated_at=now, source="derived",
+    )
+    record_daily_pnl(session, user.id, now)
+
+    tomorrow = now + timedelta(days=1)
+    good.current_price = 115
+    good.price_updated_at = tomorrow
+    sold.quantity = 4
+    sold.current_price = None
+    sold.realized_pnl = 10
+    sold.price_updated_at = tomorrow
+    session.add(good)
+    session.add(sold)
+    session.commit()
+
+    row = record_daily_pnl(session, user.id, tomorrow)
+    assert row.status == "recorded"
+    assert row.pnl_usd == 50
+    details = json.loads(row.details_json)
+    sold_detail = next(d for d in details if d["symbol"] == "SOLD")
+    assert sold_detail["pnl_usd"] == 0
+
+
+def test_position_identity_change_rebaselines_instead_of_comparing_different_assets(session, user):
+    """同一数据库 ID 的标的身份发生变化时，不能跨标的计算盈亏。"""
+    now = datetime(2026, 9, 10, 23, 55)
+    _fx(session, now, rate=7.0)
+    platform = _platform(session, user, "Broker")
+    holding = _holding(
+        session, user, platform, symbol="AAPL", currency="USD", quantity=10,
+        cost_price=100, current_price=110, price_updated_at=now,
+    )
+    record_daily_pnl(session, user.id, now)
+
+    tomorrow = now + timedelta(days=1)
+    holding.symbol = "TSLA"
+    holding.name = "Tesla"
+    holding.current_price = 115
+    holding.price_updated_at = tomorrow
+    session.add(holding)
+    session.commit()
+
+    row = record_daily_pnl(session, user.id, tomorrow)
+    assert row.status == "adjusted"
+    assert row.pnl_usd is None
+
+
+def test_cash_does_not_make_unpriceable_only_investment_look_recorded(session, user):
+    """现金不属于投资收益比较基准，不能把无可比投资持仓的一天记成零。"""
+    now = datetime(2026, 9, 10, 23, 55)
+    _fx(session, now, rate=7.0)
+    platform = _platform(session, user, "Broker")
+    holding = _holding(
+        session, user, platform, symbol="MISS", currency="USD", quantity=5,
+        cost_price=100, current_price=110, price_updated_at=now,
+    )
+    _holding(
+        session, user, platform, symbol="", name="Cash", currency="USD",
+        asset_type="cash",
+    )
+    record_daily_pnl(session, user.id, now)
+
+    tomorrow = now + timedelta(days=1)
+    holding.current_price = None
+    holding.price_updated_at = tomorrow
+    session.add(holding)
+    session.commit()
+
+    row = record_daily_pnl(session, user.id, tomorrow)
+    assert row.status == "missing"
+    assert row.pnl_usd is None
+
+
+def test_generated_opening_adjustment_requires_matching_previous_manual_position(session, user):
+    """用户填写相同期初备注不能把普通校准伪装成系统生成记录。"""
+    now = datetime(2026, 9, 10, 23, 55)
+    _fx(session, now, rate=7.0)
+    platform = _platform(session, user, "Broker")
+    holding = _holding(
+        session, user, platform, symbol="TEST", currency="USD", quantity=10,
+        cost_price=100, current_price=110, price_updated_at=now, source="derived",
+    )
+    record_daily_pnl(session, user.id, now)
+
+    tomorrow = now + timedelta(days=1)
+    holding.current_price = 115
+    holding.price_updated_at = tomorrow
+    session.add(holding)
+    session.add(Transaction(
+        user_id=user.id, platform_id=platform.id, holding_id=holding.id,
+        date=tomorrow.date().isoformat(), action="buy", symbol="TEST",
+        currency="USD", quantity=1, price=115,
+    ))
+    session.add(Transaction(
+        user_id=user.id, platform_id=platform.id, holding_id=holding.id,
+        date=tomorrow.date().isoformat(), action="adjust", symbol="TEST",
+        currency="USD", quantity=999, price=1,
+        note="期初持仓：由手填持仓转入，不产生现金流；数量为当次交易前持仓。",
+    ))
+    session.commit()
+
+    row = record_daily_pnl(session, user.id, tomorrow)
+    assert row.status == "adjusted"
+    assert row.pnl_usd is None
+
+
+def test_matching_generated_opening_adjustment_allows_normal_trade(session, user):
+    """手填持仓转交易驱动时，匹配昨日状态的系统期初记录不应重建整日基准。"""
+    now = datetime(2026, 9, 10, 23, 55)
+    _fx(session, now, rate=7.0)
+    platform = _platform(session, user, "Broker")
+    holding = _holding(
+        session, user, platform, symbol="TEST", currency="USD", quantity=10,
+        cost_price=100, current_price=110, price_updated_at=now, source="manual",
+    )
+    record_daily_pnl(session, user.id, now)
+
+    tomorrow = now + timedelta(days=1)
+    holding.source = "derived"
+    holding.current_price = 115
+    holding.price_updated_at = tomorrow
+    session.add(holding)
+    session.add(Transaction(
+        user_id=user.id, platform_id=platform.id, holding_id=holding.id,
+        date=tomorrow.date().isoformat(), action="adjust", symbol="TEST",
+        currency="USD", quantity=10, price=100,
+        note="期初持仓：由手填持仓转入，不产生现金流；数量为当次交易前持仓。",
+    ))
+    session.add(Transaction(
+        user_id=user.id, platform_id=platform.id, holding_id=holding.id,
+        date=tomorrow.date().isoformat(), action="buy", symbol="TEST",
+        currency="USD", quantity=1, price=115,
+    ))
+    session.commit()
+
+    row = record_daily_pnl(session, user.id, tomorrow)
+    assert row.status == "recorded"
+    assert row.pnl_usd == 50
+
+
+def test_duplicate_matching_opening_adjustments_rebaseline(session, user):
+    """一天只能豁免一条位于买卖前的系统期初记录。"""
+    now = datetime(2026, 9, 10, 23, 55)
+    _fx(session, now, rate=7.0)
+    platform = _platform(session, user, "Broker")
+    holding = _holding(
+        session, user, platform, symbol="TEST", currency="USD", quantity=10,
+        cost_price=100, current_price=110, price_updated_at=now, source="manual",
+    )
+    record_daily_pnl(session, user.id, now)
+
+    tomorrow = now + timedelta(days=1)
+    holding.source = "derived"
+    holding.current_price = 115
+    holding.price_updated_at = tomorrow
+    session.add(holding)
+    note = "期初持仓：由手填持仓转入，不产生现金流；数量为当次交易前持仓。"
+    for _ in range(2):
+        session.add(Transaction(
+            user_id=user.id, platform_id=platform.id, holding_id=holding.id,
+            date=tomorrow.date().isoformat(), action="adjust", symbol="TEST",
+            currency="USD", quantity=10, price=100, note=note,
+        ))
+        session.flush()
+    session.add(Transaction(
+        user_id=user.id, platform_id=platform.id, holding_id=holding.id,
+        date=tomorrow.date().isoformat(), action="buy", symbol="TEST",
+        currency="USD", quantity=1, price=115,
+    ))
+    session.commit()
+
+    assert record_daily_pnl(session, user.id, tomorrow).status == "adjusted"
+
+
+def test_generated_opening_uses_total_cost_before_unit_cost(session, user):
+    """系统期初校准的成本优先级须与 opening_transaction 完全一致。"""
+    now = datetime(2026, 9, 10, 23, 55)
+    _fx(session, now, rate=7.0)
+    platform = _platform(session, user, "Broker")
+    holding = _holding(
+        session, user, platform, symbol="FUND", currency="USD", quantity=10,
+        cost_price=90, cost_value=1000, current_price=110,
+        price_updated_at=now, source="manual",
+    )
+    record_daily_pnl(session, user.id, now)
+
+    tomorrow = now + timedelta(days=1)
+    holding.source = "derived"
+    holding.current_price = 115
+    holding.price_updated_at = tomorrow
+    session.add(holding)
+    session.add(Transaction(
+        user_id=user.id, platform_id=platform.id, holding_id=holding.id,
+        date=tomorrow.date().isoformat(), action="adjust", symbol="FUND",
+        currency="USD", quantity=10, price=100,
+        note="期初持仓：由手填持仓转入，不产生现金流；数量为当次交易前持仓。",
+    ))
+    session.flush()
+    session.add(Transaction(
+        user_id=user.id, platform_id=platform.id, holding_id=holding.id,
+        date=tomorrow.date().isoformat(), action="buy", symbol="FUND",
+        currency="USD", quantity=1, price=115,
+    ))
+    session.commit()
+
+    assert record_daily_pnl(session, user.id, tomorrow).status == "recorded"
+
+
+def test_historical_missing_cost_reason_is_preserved(client, session, user):
+    now = datetime(2026, 9, 10, 23, 55)
+    _fx(session, now, rate=7.0)
+    platform = _platform(session, user, "Broker")
+    holding = _holding(
+        session, user, platform, symbol="MISS", currency="USD", quantity=0,
+        cost_price=None, current_price=None, price_updated_at=now,
+        source="derived", realized_pnl=10,
+    )
+    holding.realized_pnl_incomplete = True
+    session.add(holding)
+    session.commit()
+    record_daily_pnl(session, user.id, now)
+
+    tomorrow = now + timedelta(days=1)
+    _fx(session, tomorrow, rate=7.0)
+    row = record_daily_pnl(session, user.id, tomorrow)
+    details = json.loads(row.details_json)
+    assert details[0]["status"] == "excluded"
+    assert "历史卖出缺成本" in details[0]["reason"]
 
 
 def test_detail_old_history_has_no_detail(client, session, user):

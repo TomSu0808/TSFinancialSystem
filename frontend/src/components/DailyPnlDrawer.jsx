@@ -75,7 +75,20 @@ export default function DailyPnlDrawer({ open, onClose, masked, refreshKey }) {
   }, [open, view, selectedDay, displayCurrency, detailRevision])
 
   const money = (v) => masked ? '****' : `${v > 0 ? '+' : ''}${CURRENCY_SYMBOL[displayCurrency]}${fmt(v)}`
-  const moneyOrPending = (v) => (v == null ? '待确认' : money(v))
+  const moneyOrPending = (v, status, reason = '') => {
+    if (status === 'not_applicable') return '不计入'
+    if (status === 'excluded') {
+      if (v != null && v !== 0) return `${money(v)}（仅分红/利息）`
+      return (reason || '').includes('历史卖出') ? '缺历史成本' : '缺价格/成本'
+    }
+    if (v != null) return money(v)
+    if (status === 'adjusted') return '口径变更，未计算'
+    if (status === 'baseline') return '建立基准'
+    if (status === 'missing') return '数据不足'
+    if (status === 'stale') return '待更新'
+    if (status === 'no_baseline') return '无昨日基准'
+    return '待确认'
+  }
 
   const openDetail = (day) => {
     setSelectedDay(day)
@@ -127,7 +140,7 @@ export default function DailyPnlDrawer({ open, onClose, masked, refreshKey }) {
     return (
       <Space direction="vertical" size={0}>
         <Typography.Text strong>{cell.key}{it.provisional ? ' · 今日暂计' : ''}</Typography.Text>
-        <Typography.Text>{it.pnl == null ? '待确认' : money(it.pnl)}</Typography.Text>
+        <Typography.Text>{moneyOrPending(it.pnl, it.status, it.note)}</Typography.Text>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>{labels[it.status] || it.status}</Typography.Text>
         {it.note && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{it.note}</Typography.Text>}
       </Space>
@@ -175,9 +188,7 @@ export default function DailyPnlDrawer({ open, onClose, masked, refreshKey }) {
           const isSelected = cell.key === selectedDay
           const isFuture = cell.key > todayStr
           const clickable = !!it
-          const statusText = it && pnl == null
-            ? (it.status === 'recorded' ? '待确认' : labels[it.status] || it.status)
-            : null
+          const statusText = it && pnl == null ? moneyOrPending(null, it.status, it.note) : null
           const noRecord = !it && !isFuture
           return (
             <Tooltip key={i} title={cellTooltip(cell)} mouseEnterDelay={0.05}>
@@ -221,7 +232,7 @@ export default function DailyPnlDrawer({ open, onClose, masked, refreshKey }) {
           <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 8 }}>
             <Typography.Text strong>{row.day} <Typography.Text type="secondary">UTC</Typography.Text></Typography.Text>
             <strong style={{ color: masked ? undefined : row.pnl > 0 ? upColor : row.pnl < 0 ? downColor : undefined, overflowWrap: 'anywhere' }}>
-              {row.pnl == null ? '待确认' : money(row.pnl)}
+              {moneyOrPending(row.pnl, row.status, row.note)}
             </strong>
           </div>
           <div style={{ margin: '8px 0' }}><Tag>{labels[row.status] || row.status}</Tag>{row.provisional && <Tag>今日暂计</Tag>}</div>
@@ -239,7 +250,7 @@ export default function DailyPnlDrawer({ open, onClose, masked, refreshKey }) {
       locale={{ emptyText: <Empty description="尚无每日盈亏记录；自动刷新后开始建立基准，历史不会补零。" /> }}
       columns={[
         { title: '日期（UTC）', dataIndex: 'day', render: (day, row) => <span>{day}{row.provisional && <Tag style={{ marginLeft: 6 }}>今日暂计</Tag>}</span> },
-        { title: `盈亏（${displayCurrency}）`, dataIndex: 'pnl', align: 'right', render: (v) => v == null ? <Typography.Text type="secondary">待确认</Typography.Text> : <span style={{ fontWeight: 600, color: masked ? undefined : v > 0 ? upColor : v < 0 ? downColor : undefined }}>{money(v)}</span> },
+        { title: `盈亏（${displayCurrency}）`, dataIndex: 'pnl', align: 'right', render: (v, row) => v == null ? <Typography.Text type="secondary">{moneyOrPending(v, row.status, row.note)}</Typography.Text> : <span style={{ fontWeight: 600, color: masked ? undefined : v > 0 ? upColor : v < 0 ? downColor : undefined }}>{money(v)}</span> },
         { title: '状态', dataIndex: 'status', render: (value, row) => <Tag title={row.note}>{labels[value] || value}</Tag> },
         { title: '', dataIndex: 'day', align: 'right', render: (day) => <Button size="small" type="link" onClick={() => openDetail(day)}>查看明细</Button> },
       ]}
@@ -268,7 +279,7 @@ export default function DailyPnlDrawer({ open, onClose, masked, refreshKey }) {
                 {detail.rounding_diff !== 0 && <Tag color="default">有舍入差</Tag>}
               </Space>
               <Typography.Text strong style={{ fontSize: 16, color: detail.total == null ? undefined : masked ? undefined : detail.total > 0 ? upColor : detail.total < 0 ? downColor : undefined }}>
-                当日总盈亏 {moneyOrPending(detail.total)}
+                当日总盈亏 {moneyOrPending(detail.total, detail.status, detail.note)}
               </Typography.Text>
             </div>
             {detail.note && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{detail.note}</Typography.Text>}
@@ -290,7 +301,7 @@ export default function DailyPnlDrawer({ open, onClose, masked, refreshKey }) {
                           {p.symbol && p.name && <span style={{ color: '#aaa', fontSize: 12 }}>{p.symbol}</span>}
                           <Typography.Text type="secondary" style={{ fontSize: 12 }}>{ASSET_TYPE_LABEL[p.asset_type] || p.asset_type}</Typography.Text>
                         </Space>
-                        <strong style={{ color }}>{moneyOrPending(p.pnl)}</strong>
+                        <strong style={{ color }}>{moneyOrPending(p.pnl, p.status, p.reason)}</strong>
                       </div>
                       {p.pnl_native != null && p.currency !== displayCurrency && (
                         <div style={{ fontSize: 12, color: '#8c8c8c', marginTop: 4 }}>

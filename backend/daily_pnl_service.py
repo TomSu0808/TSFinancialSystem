@@ -103,14 +103,107 @@ def record_daily_pnl(session: Session, user_id: int, now=None) -> DailyPnl:
             for t in txns if t.date <= cutoff and t.action not in ("deposit", "withdraw", "cash_adjust")
         ], key=lambda x: x[0]))
 
-    basis = {"manual": _digest(sorted(manual_basis)), "transactions": txn_digest(day),
-             "holdings": sorted(h.id for h in holdings
-                                if h.asset_type != "cash" and h.id not in excluded)}
+    manual_positions = {
+        str(h_id): [currency, quantity, cost_price, cost_value]
+        for h_id, currency, quantity, cost_price, cost_value in manual_basis
+    }
+    basis = {
+        "manual": _digest(sorted(manual_basis)),
+        "manual_positions": manual_positions,
+        "transactions": txn_digest(day),
+        "holdings": sorted(h.id for h in holdings
+                           if h.asset_type != "cash" and h.id not in excluded),
+    }
     old_basis = json.loads(previous.basis_json) if previous else {}
+    previous_details = json.loads(previous.details_json or "[]") if previous else []
+    has_prev_details = bool(previous_details)
+    prev_by_id = {d.get("holding_id"): d for d in previous_details}
+    prev_by_key = {}
+    duplicate_position_keys = set()
+    for detail in previous_details:
+        key = detail.get("position_key")
+        if not key:
+            continue
+        if key in prev_by_key:
+            duplicate_position_keys.add(key)
+            prev_by_key.pop(key, None)
+        elif key not in duplicate_position_keys:
+            prev_by_key[key] = detail
+
     rates, usdcny, fx_time = get_to_cny_rates(session)
     fx_stale = fx_time == "unknown" or now - datetime.fromisoformat(fx_time) > timedelta(hours=24)
     uses_fx = any(h.currency != "CNY" and h.asset_type != "cash" for h in holdings)
     complete = not stale and not (uses_fx and fx_stale)
+
+    today_trades = [
+        t for t in txns
+        if t.date == day and t.action in ("buy", "sell") and t.holding_id is not None
+    ]
+    today_trade_ids = {t.holding_id for t in today_trades}
+    old_manual_positions = old_basis.get("manual_positions")
+    opening_note = "期初持仓：由手填持仓转入，不产生现金流；数量为当次交易前持仓。"
+
+    def matches_generated_opening(t):
+        if (t.action != "adjust" or t.date != day or t.holding_id not in today_trade_ids
+                or t.note != opening_note or old_manual_positions is None):
+            return False
+        old = old_manual_positions.get(str(t.holding_id))
+        if old is None:
+            return False
+        old_currency, old_quantity, old_cost_price, old_cost_value = old
+        expected_price = old_cost_price
+        if old_cost_value is not None and old_quantity is not None and old_quantity > 0:
+            expected_price = old_cost_value / old_quantity
+        return (t.currency.value == old_currency
+                and t.quantity == old_quantity
+                and t.price == expected_price)
+
+    matching_openings = [t for t in txns if matches_generated_opening(t)]
+    generated_opening_ids = set()
+    for holding_id in today_trade_ids:
+        candidates = [t for t in matching_openings if t.holding_id == holding_id]
+        trades = [t for t in today_trades if t.holding_id == holding_id]
+        if (len(candidates) == 1 and candidates[0].id is not None
+                and any(trade.id is not None and candidates[0].id < trade.id for trade in trades)):
+            generated_opening_ids.add(candidates[0].id)
+
+    explicit_adjustment = any(
+        t.action == "adjust" and t.date == day and t.id not in generated_opening_ids
+        for t in txns
+    )
+    if old_manual_positions is None:
+        manual_changed = old_basis.get("manual") != basis["manual"]
+    else:
+        manual_ids = set(old_manual_positions) | set(manual_positions)
+        changed_manual_ids = {
+            int(h_id) for h_id in manual_ids
+            if old_manual_positions.get(h_id) != manual_positions.get(h_id)
+        }
+        manual_changed = bool(changed_manual_ids - today_trade_ids)
+
+    current_non_cash = {
+        s["holding_id"]: s for s in snapshots if s["asset_type"] != "cash"
+    }
+    current_non_cash_ids = set(current_non_cash)
+    if has_prev_details:
+        previous_non_cash = {
+            d.get("holding_id"): d for d in previous_details
+            if d.get("asset_type") != "cash" and d.get("holding_id") is not None
+        }
+        previous_non_cash_ids = set(previous_non_cash)
+        added_without_trade = (current_non_cash_ids - previous_non_cash_ids) - today_trade_ids
+        removed_positions = previous_non_cash_ids - current_non_cash_ids
+        identity_changes = {
+            h_id for h_id in current_non_cash_ids & previous_non_cash_ids
+            if current_non_cash[h_id].get("position_key")
+            != previous_non_cash[h_id].get("position_key")
+        }
+        holdings_changed = bool(added_without_trade or removed_positions or identity_changes)
+    else:
+        # 旧记录没有逐仓位明细时，保留原来的保守保护。
+        holdings_changed = set(old_basis.get("holdings", [])) != set(basis["holdings"])
+
+    history_changed = old_basis.get("transactions") != txn_digest(yesterday)
 
     row.pnl_cny = row.pnl_usd = None
     if stale or (uses_fx and fx_stale):
@@ -122,31 +215,19 @@ def record_daily_pnl(session: Session, user_id: int, now=None) -> DailyPnl:
     elif not previous.coverage_complete:
         status = "missing"
         note = "前一日估值不完整，今日重新建立基准"
-    elif (old_basis.get("manual") != basis["manual"]
-          or any(t.action == "adjust" and t.date == day for t in txns)
-          or old_basis.get("transactions") != txn_digest(yesterday)
-          or set(old_basis.get("holdings", [])) != set(basis["holdings"])):
+    elif manual_changed or explicit_adjustment or history_changed or holdings_changed:
         status = "adjusted"
-        note = "持仓本金、交易、资产记录或可估值范围发生变更，今日重新建立基准"
+        note = "持仓本金或历史记录发生变更，今日重新建立基准"
     else:
-        old = json.loads(previous.returns_json)
-        delta = sum((native.get(c, 0) - old.get(c, 0)) * rates[Currency(c)]
-                    for c in set(native) | set(old))
-        row.pnl_cny = round(delta, 2)
-        row.pnl_usd = round(delta / usdcny, 2) if not fx_stale else None
         status = "recorded"
         note = "累计持仓收益的原币种日差额；含已实现盈亏及分红，排除入出金和汇兑变动"
-        if excluded:
-            note += f"；{len(excluded)} 项持仓缺少价格或成本，未计入"
 
-    row.status = status
-    row.note = note
-
-    # 逐仓位日盈亏：使用与当日总额一致的口径（原币累计收益差），按记录时汇率折算。
-    previous_details = json.loads(previous.details_json or "[]") if previous else []
-    prev_by_id = {d.get("holding_id"): d for d in previous_details}
-    has_prev_details = bool(previous_details)
-
+    # 逐仓位日盈亏与总额使用同一口径。新增、缺价或恢复估值的持仓只排除自身，
+    # 不再因为可估值范围变化而让其他持仓和整日盈亏全部失效。
+    details_total_cny = 0.0
+    comparable_count = 0
+    partial_income_count = 0
+    no_baseline_count = 0
     for s in snapshots:
         s["pnl_native"] = s["pnl_cny"] = s["pnl_usd"] = None
         s["fx_rate"] = usdcny
@@ -156,22 +237,69 @@ def record_daily_pnl(session: Session, user_id: int, now=None) -> DailyPnl:
             s["reason"] = note
         if status != "recorded":
             continue
+        if s["asset_type"] == "cash":
+            s["status"] = "not_applicable"
+            s["reason"] = "现金不计入投资盈亏"
+            continue
+
         prev = prev_by_id.get(s["holding_id"])
+        if prev is not None and prev.get("position_key") != s["position_key"]:
+            prev = None
+        if prev is None and s["holding_id"] not in prev_by_id:
+            prev = prev_by_key.get(s["position_key"])
         if not has_prev_details or prev is None:
             s["status"] = "no_baseline"
             s["reason"] = "前一日未记录持仓明细" if not has_prev_details else "新增持仓，无前一日基准"
+            no_baseline_count += 1
             continue
-        d_native = s["cumulative"] - (prev.get("cumulative") or 0.0)
+        if not s["excluded"] and prev.get("excluded", False):
+            s["status"] = "no_baseline"
+            s["reason"] = "前一日缺价格或成本，今日重新建立持仓基准"
+            no_baseline_count += 1
+            continue
+
+        if s["excluded"]:
+            # 缺少当日估值时，卖出已实现收益可能只是把昨日未实现收益结转，
+            # 直接相减会重复计算；分红/利息增量不依赖估值，可以安全计入。
+            d_native = s["realized_income"] - (prev.get("realized_income") or 0.0)
+        else:
+            d_native = s["cumulative"] - (prev.get("cumulative") or 0.0)
         d_cny = d_native * rates[Currency(s["currency"])]
         s["pnl_native"] = round(d_native, 2)
         s["pnl_cny"] = round(d_cny, 2)
         s["pnl_usd"] = round(d_cny / usdcny, 2) if not fx_stale else None
+        details_total_cny += d_cny
         if s["excluded"]:
+            if d_native:
+                partial_income_count += 1
             s["status"] = "excluded"
-            s["reason"] = "缺价格或成本，仅计入已实现盈亏与分红"
+            specific_reason = s["reason"] or "缺价格或成本"
+            s["reason"] = f"{specific_reason}；仅计入分红与利息，卖出盈亏未计入"
         else:
+            comparable_count += 1
             s["reason"] = ""
 
+    if status == "recorded":
+        if has_prev_details:
+            if comparable_count or partial_income_count:
+                row.pnl_cny = round(details_total_cny, 2)
+                row.pnl_usd = round(details_total_cny / usdcny, 2) if not fx_stale else None
+            else:
+                status = "missing"
+                note = "没有可与前一日比较的持仓，今日建立逐仓位基准"
+        else:
+            old = json.loads(previous.returns_json)
+            delta = sum((native.get(c, 0) - old.get(c, 0)) * rates[Currency(c)]
+                        for c in set(native) | set(old))
+            row.pnl_cny = round(delta, 2)
+            row.pnl_usd = round(delta / usdcny, 2) if not fx_stale else None
+        if excluded:
+            note += f"；{len(excluded)} 项持仓缺少价格或成本，未计入未实现盈亏"
+        if no_baseline_count:
+            note += f"；{no_baseline_count} 项持仓无可比基准，未计入"
+
+    row.status = status
+    row.note = note
     row.returns_json = json.dumps(native)
     row.basis_json = json.dumps(basis)
     row.details_json = json.dumps(snapshots, ensure_ascii=False)
