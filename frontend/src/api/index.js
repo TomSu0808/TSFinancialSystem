@@ -199,18 +199,31 @@ export const importBackup = (payload) => client.post('/backup/import', payload).
 
 // ---- 投研工作台 ----
 export const listResearchTemplates = () => client.get('/research/templates').then((r) => r.data)
-export const generateResearchPrompt = (data) => client.post('/research/prompts', data).then((r) => r.data)
 export const listResearchReports = (params) => client.get('/research/reports', { params }).then((r) => r.data)
-export const createResearchReport = (data) => client.post('/research/reports', data).then((r) => r.data)
 export const getResearchReport = (id) => client.get(`/research/reports/${id}`).then((r) => r.data)
-export const updateResearchReport = (id, data) => client.put(`/research/reports/${id}`, data).then((r) => r.data)
 export const deleteResearchReport = (id) => client.delete(`/research/reports/${id}`).then((r) => r.data)
 // AI 投研任务（直接调用 AI，无需手动复制 prompt）
 export const createResearchRun = (data) => client.post('/research/runs', data).then((r) => r.data)
+export const previewResearchRun = (data) => client.post('/research/preview', data).then((r) => r.data)
 export const refreshResearchRun = (id) => client.post(`/research/runs/${id}/refresh`).then((r) => r.data)
 export const cancelResearchReport = (id) => client.post(`/research/reports/${id}/cancel`).then((r) => r.data)
-export const generateTrackingNotes = (reportId) =>
-  client.post(`/research/reports/${reportId}/tracking-notes`).then((r) => r.data)
+export const updateResearchRun = (id, data) => client.post(`/research/reports/${id}/update`, data).then((r) => r.data)
+export const listResearchVersions = (id) => client.get(`/research/reports/${id}/versions`).then((r) => r.data)
+export const listResearchEvents = (id) => client.get(`/research/reports/${id}/events`).then((r) => r.data)
+export const generateTrackingNotes = (reportId, data) =>
+  client.post(`/research/reports/${reportId}/tracking-notes`, data).then((r) => r.data)
+export const listTrackingCandidates = (reportId) =>
+  client.get(`/research/reports/${reportId}/tracking-candidates`).then((r) => r.data)
+export const listResearchMessages = (reportId) =>
+  client.get(`/research/reports/${reportId}/messages`).then((r) => r.data)
+export const createResearchMessage = (reportId, data) =>
+  client.post(`/research/reports/${reportId}/messages`, data).then((r) => r.data)
+export const cancelResearchMessage = (reportId, messageId) =>
+  client.post(`/research/reports/${reportId}/messages/${messageId}/cancel`).then((r) => r.data)
+export const getResearchPreferences = () =>
+  client.get('/research/preferences').then((r) => r.data)
+export const saveResearchPreferences = (data) =>
+  client.put('/research/preferences', data).then((r) => r.data)
 
 // ---- 持仓研究摘要 ----
 export const getHoldingResearchBrief = (holdingId) =>

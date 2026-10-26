@@ -1,4 +1,5 @@
-"""投研工作台路由：模板列表、AI 投研任务、报告 CRUD（按用户隔离）。"""
+"""投研工作台路由：模板、研究任务、报告、追问、更新、跟踪事项（按用户隔离）。"""
+import json
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -9,10 +10,20 @@ from sqlmodel import Session, select
 
 from auth import get_current_user
 from database import get_session
-from models import Holding, HoldingStatus, Note, ResearchReport, ResearchReportCreate, ResearchReportUpdate, ResearchRunCreate, User
-from models import Currency, cost_basis, market_value, profit
+from models import (
+    Holding, HoldingStatus, Note, ResearchMessage, ResearchMessageCreate,
+    ResearchPreference, ResearchPreferenceUpdate, ResearchPreviewRequest,
+    ResearchReport, ResearchReportCreate, ResearchReportUpdate,
+    ResearchRunCreate, ResearchRunEvent, ResearchUpdateRequest, TrackingSaveRequest,
+    User,
+)
+from models import Currency
 from ai_berkshire_loader import list_skills
+import research_chat
+import research_events
+import research_jobs
 import research_service
+import research_structured
 from threading import Lock
 from ai_client import AIServiceNotConfigured
 
@@ -26,105 +37,6 @@ def _owned(session: Session, report_id: int, user: User) -> ResearchReport:
     if not report or report.user_id != user.id:
         raise HTTPException(404, "报告不存在")
     return report
-
-
-def _holding_context(h: Holding) -> str:
-    mv = market_value(h)
-    cb = cost_basis(h)
-    pnl = profit(h)
-    pnl_str = f"{pnl:+.2f} {h.currency.value}" if pnl is not None else "—"
-    cost_str = f"{cb:.2f} {h.currency.value}" if cb is not None else "—"
-    lines = [
-        "",
-        "## 持仓数据（平台自动填入）",
-        f"- **名称**：{h.name}  **代码**：{h.symbol or '—'}  **市场**：{h.market.value}  **币种**：{h.currency.value}",
-        f"- **数量**：{h.quantity or '—'}  **成本价**：{h.cost_price or '—'}  **现价**：{h.current_price or '—'}",
-        f"- **成本合计**：{cost_str}  **市值**：{mv:.2f} {h.currency.value}",
-        f"- **未实现盈亏**：{pnl_str}  **已实现盈亏**：{h.realized_pnl:+.2f} {h.currency.value}",
-        "",
-    ]
-    return "\n".join(lines)
-
-
-HKD_PEG = 7.8
-
-
-def _get_to_cny_rates(session: Session) -> tuple:
-    """返回 (to_cny_dict, usdcny, fx_updated_at)。"""
-    from models import FxRate
-    fx = session.exec(select(FxRate).where(FxRate.pair == "USDCNY")).first()
-    usdcny = fx.rate if fx else 7.2
-    fx_updated_at = fx.updated_at.isoformat() if fx and fx.updated_at else "unknown"
-    to_cny = {
-        Currency.CNY: 1.0,
-        Currency.USD: usdcny,
-        Currency.HKD: usdcny / HKD_PEG,
-    }
-    return to_cny, usdcny, fx_updated_at
-
-
-def _portfolio_context(holdings: List[Holding], session: Session) -> str:
-    """生成 Portfolio Review 持仓上下文（CNY 统一折算口径）。"""
-    if not holdings:
-        return "\n**（当前无持仓数据）**\n"
-
-    to_cny, usdcny, fx_updated_at = _get_to_cny_rates(session)
-
-    rows_data = []
-    total_cny = 0.0
-    for h in holdings:
-        mv_native = market_value(h)
-        rate = to_cny.get(h.currency, 1.0)
-        mv_cny = mv_native * rate
-        pnl = profit(h)
-        pnl_cny = pnl * rate if pnl is not None else None
-        total_cny += mv_cny
-        rows_data.append({
-            "h": h, "mv_native": mv_native, "mv_cny": mv_cny,
-            "pnl": pnl, "pnl_cny": pnl_cny,
-        })
-
-    rows = []
-    for d in rows_data:
-        h = d["h"]
-        mv_native = d["mv_native"]
-        pnl = d["pnl"]
-        w = (d["mv_cny"] / total_cny * 100) if total_cny else 0
-        if h.currency == Currency.CNY:
-            mv_str = f"{mv_native:.0f} CNY"
-        else:
-            mv_str = f"{mv_native:.0f} {h.currency.value}（≈{d['mv_cny']:.0f} CNY）"
-        pnl_str = f"{pnl:+.2f} {h.currency.value}" if pnl is not None else "—"
-        rows.append(
-            f"| {h.name} | {h.symbol or '—'} | {h.market.value} | {h.currency.value} "
-            f"| {h.quantity or '—'} | {h.cost_price or '—'} | {h.current_price or '—'} "
-            f"| {mv_str} | {pnl_str} | {w:.1f}% |"
-        )
-
-    header = (
-        "\n## 当前持仓（平台自动填入，CNY 统一折算口径）\n\n"
-        "| 名称 | 代码 | 市场 | 币种 | 数量 | 成本价 | 现价 | 市值 | 未实现盈亏 | 占比(CNY) |\n"
-        "|------|------|------|------|------|-------|------|------|-----------|----------|\n"
-    )
-
-    fx_info = (
-        f"\n**汇率信息**：USD/CNY = {usdcny:.4f}，HKD/CNY ≈ {usdcny / HKD_PEG:.4f}（联系汇率≈7.8 HKD/USD）\n"
-        f"**汇率更新时间**：{fx_updated_at}\n"
-    )
-
-    disclaimer = (
-        "\n> ⚠️ **数据说明**：以上市值为持仓原币种金额及按 CNY 折算近似值；"
-        "组合占比基于 CNY 折算市值计算；行情非实时数据；汇率非实时更新。"
-        "请勿将 AI 输出视为确定性投资建议。\n"
-    )
-
-    return (
-        header
-        + "\n".join(rows)
-        + f"\n\n**组合总市值（CNY 折算）：约 {total_cny:,.0f} CNY**"
-        + fx_info
-        + disclaimer
-    )
 
 
 # ── 模板列表 ──────────────────────────────────────────────────────
@@ -161,6 +73,113 @@ def create_run(
             extra_instruction=data.extra_instruction,
             use_web_search=data.use_web_search,
             display_currency=data.display_currency,
+            execution_mode=data.execution_mode,
+            include_holding_context=data.include_holding_context,
+            idempotency_key=data.idempotency_key,
+        )
+    except AIServiceNotConfigured as exc:
+        raise HTTPException(400, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except PermissionError as exc:
+        raise HTTPException(404, str(exc))
+    except Exception as exc:
+        raise HTTPException(500, f"研究任务启动失败：{str(exc)[:500]}")
+    finally:
+        with _launch_guard:
+            _launches.discard(user.id)
+
+
+@router.post("/preview")
+def preview_run(
+    data: ResearchPreviewRequest,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """提交前预览实际会携带的数据；不调用模型、不写数据库。"""
+    try:
+        return research_service.build_preview(
+            session=session,
+            user=user,
+            template_key=data.template_key,
+            target_name=data.target_name,
+            symbol=data.symbol,
+            market=data.market,
+            related_holding_id=data.related_holding_id,
+            report_language=data.report_language.value,
+            display_currency=data.display_currency,
+            execution_mode=data.execution_mode,
+            include_holding_context=data.include_holding_context,
+            use_web_search=data.use_web_search,
+            ai_provider=data.ai_provider,
+        )
+    except PermissionError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.get("/preferences")
+def get_research_preferences(
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    pref = research_service.get_preferences(session, user)
+    return {
+        "investment_goal": pref.investment_goal if pref else None,
+        "holding_period": pref.holding_period if pref else None,
+        "risk_preference": pref.risk_preference if pref else None,
+    }
+
+
+@router.put("/preferences")
+def save_research_preferences(
+    data: ResearchPreferenceUpdate,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    pref = research_service.save_preferences(
+        session, user, data.model_dump(exclude_unset=True))
+    return {
+        "investment_goal": pref.investment_goal,
+        "holding_period": pref.holding_period,
+        "risk_preference": pref.risk_preference,
+    }
+
+
+@router.post("/runs/{report_id}/refresh", response_model=ResearchReport)
+def refresh_run(
+    report_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    report = _owned(session, report_id, user)
+    return research_service.refresh_run(session, report)
+
+
+@router.post("/reports/{report_id}/update", response_model=ResearchReport)
+def update_research(
+    report_id: int,
+    data: ResearchUpdateRequest,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """以旧报告为基线，核查新资料并生成新版本，保留版本链。"""
+    parent = _owned(session, report_id, user)
+    with _launch_guard:
+        if user.id in _launches:
+            raise HTTPException(409, "已有研究正在提交，请勿重复点击")
+        _launches.add(user.id)
+    try:
+        return research_service.create_update_run(
+            session=session,
+            user=user,
+            parent=parent,
+            extra_instruction=data.extra_instruction,
+            ai_provider=data.ai_provider,
+            ai_model=data.ai_model,
+            use_web_search=data.use_web_search,
+            idempotency_key=data.idempotency_key,
         )
     except AIServiceNotConfigured as exc:
         raise HTTPException(400, str(exc))
@@ -173,14 +192,106 @@ def create_run(
             _launches.discard(user.id)
 
 
-@router.post("/runs/{report_id}/refresh", response_model=ResearchReport)
-def refresh_run(
+@router.get("/reports/{report_id}/versions")
+def list_versions(
     report_id: int,
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
     report = _owned(session, report_id, user)
-    return research_service.refresh_run(session, report)
+    chain: List[ResearchReport] = []
+    seen = set()
+    current: Optional[ResearchReport] = report
+    while current is not None and current.id not in seen:
+        seen.add(current.id)
+        chain.append(current)
+        current = session.get(ResearchReport, current.parent_report_id) if current.parent_report_id else None
+        if current is not None and current.user_id != user.id:
+            current = None
+    # Include later versions so opening v1 still shows the forward chain.
+    queue = list(chain)
+    while queue:
+        node = queue.pop(0)
+        children = session.exec(
+            select(ResearchReport).where(
+                ResearchReport.user_id == user.id,
+                ResearchReport.parent_report_id == node.id,
+            )
+        ).all()
+        for child in children:
+            if child.id not in seen:
+                seen.add(child.id)
+                chain.append(child)
+                queue.append(child)
+    chain.sort(key=lambda r: (r.version or 1, r.id))
+    return [
+        {
+            "id": r.id, "version": r.version, "title": r.title,
+            "status": r.status, "created_at": r.created_at.isoformat() if r.created_at else None,
+            "parent_report_id": r.parent_report_id,
+        }
+        for r in chain
+    ]
+
+
+@router.get("/reports/{report_id}/events")
+def list_run_events(
+    report_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    _owned(session, report_id, user)
+    events = research_events.list_events(session, report_id, user.id)
+    return [
+        {
+            "id": e.id, "seq": e.seq, "stage": e.stage, "status": e.status,
+            "message": e.message,
+            "payload": json.loads(e.payload_json) if e.payload_json else None,
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+        }
+        for e in events
+    ]
+
+
+@router.get("/reports/{report_id}/messages")
+def list_report_messages(
+    report_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    report = _owned(session, report_id, user)
+    return [m.model_dump() for m in research_chat.list_messages(session, report)]
+
+
+@router.post("/reports/{report_id}/messages", response_model=ResearchMessage)
+def create_report_message(
+    report_id: int,
+    data: ResearchMessageCreate,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    report = _owned(session, report_id, user)
+    try:
+        return research_chat.start_exchange(
+            session, user, report, data.question, data.use_web_search, data.request_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.post("/reports/{report_id}/messages/{message_id}/cancel")
+def cancel_report_message(
+    report_id: int,
+    message_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    _owned(session, report_id, user)
+    message = session.get(ResearchMessage, message_id)
+    if not message or message.report_id != report_id or message.user_id != user.id:
+        raise HTTPException(404, "消息不存在")
+    return research_chat.cancel_message(session, user, message)
 
 
 # ── Prompt 生成（保留旧接口，不再作为主流程）────────────────────────
@@ -217,12 +328,12 @@ def generate_prompt(
                 Holding.status != HoldingStatus.closed,
             )
         ).all()
-        portfolio_ctx = _portfolio_context(list(holdings), session)
+        portfolio_ctx = research_service._portfolio_context(list(holdings), session)
     elif req.holding_id is not None:
         h = session.get(Holding, req.holding_id)
         if not h or h.user_id != user.id:
             raise HTTPException(404, "持仓不存在")
-        holding_ctx = _holding_context(h)
+        holding_ctx = research_service._holding_context(h, session)
 
     prompt = research_prompt_builder.build_prompt(
         skill_md=skill_md,
@@ -265,19 +376,31 @@ def portfolio_summary(
     task = {"id": latest.id, "status": latest.status, "error_message": latest.error_message} if latest else None
     if not report:
         return {"report": None, "latest_task": task}
-    conclusions = _extract_bullets(report.report_md, ("结论摘要", "Summary"))
-    risks = _extract_bullets(report.report_md, ("主要风险", "Key Risks"))
-    actions = _extract_bullets(report.report_md, ("行动项", "Action Items"))
+    structured = {}
+    try:
+        structured = json.loads(report.report_json or "{}")
+    except (TypeError, ValueError):
+        structured = {}
+    conclusions = [item.get("text") for item in structured.get("key_facts") or [] if item.get("text")]
+    risks = [item.get("text") for item in structured.get("risks") or [] if item.get("text")]
+    actions = [item.get("text") for item in structured.get("tracking") or [] if item.get("text")]
+    if not conclusions:
+        conclusions = _extract_bullets(report.report_md, ("结论摘要", "Summary"))
+    if not risks:
+        risks = _extract_bullets(report.report_md, ("主要风险", "Key Risks"))
+    if not actions:
+        actions = _extract_bullets(report.report_md, ("行动项", "Action Items"))
     match = re.search(r"分析时点：([^\n]+)", report.input_context_md or "")
     currency = re.search(r"展示币种：([A-Z]+)", report.input_context_md or "")
     return {
         "latest_task": task,
         "report": {
             "id": report.id, "title": report.title,
-            "as_of": match.group(1).strip() if match else None,
+            "as_of": report.data_cutoff or (match.group(1).strip() if match else None),
             "display_currency": currency.group(1) if currency else None,
             "status": report.status, "conclusions": conclusions[:3], "risks": risks[:5],
-            "actions": actions[:5], "degraded": not conclusions,
+            "actions": actions[:5], "degraded": not conclusions or structured.get("degraded", False),
+            "version": report.version,
         }
     }
 
@@ -342,6 +465,33 @@ def delete_report(
     user: User = Depends(get_current_user),
 ):
     report = _owned(session, report_id, user)
+    # Child versions keep their content but lose a dangling parent reference.
+    children = session.exec(
+        select(ResearchReport).where(
+            ResearchReport.user_id == user.id,
+            ResearchReport.parent_report_id == report_id,
+        )
+    ).all()
+    for child in children:
+        child.parent_report_id = None
+        session.add(child)
+    linked_notes = session.exec(
+        select(Note).where(
+            Note.user_id == user.id,
+            Note.source_report_id == report_id,
+        )
+    ).all()
+    for note in linked_notes:
+        note.source_report_id = None
+        session.add(note)
+    for message in session.exec(
+        select(ResearchMessage).where(ResearchMessage.report_id == report_id)
+    ).all():
+        session.delete(message)
+    for event in session.exec(
+        select(ResearchRunEvent).where(ResearchRunEvent.report_id == report_id)
+    ).all():
+        session.delete(event)
     session.delete(report)
     session.commit()
     return {"ok": True}
@@ -375,18 +525,59 @@ def _extract_action_items(report_md: str) -> List[str]:
     return _extract_bullets(report_md, ("行动项", "Action Items"))
 
 
-@router.post("/reports/{report_id}/tracking-notes")
-def generate_tracking_notes(
+def _tracking_candidates(report: ResearchReport) -> List[Dict[str, Any]]:
+    structured = {}
+    try:
+        structured = json.loads(report.report_json or "{}")
+    except (TypeError, ValueError):
+        structured = {}
+    return research_structured.tracking_candidates(report.report_md, structured)
+
+
+@router.get("/reports/{report_id}/tracking-candidates")
+def list_tracking_candidates(
     report_id: int,
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """从 AI 报告的「行动项」章节生成跟踪事项（Note）。重复调用返回已有记录。"""
+    """预览跟踪事项；用户勾选/编辑后才写入决策日志。"""
+    report = _owned(session, report_id, user)
+    if not report.report_md:
+        raise HTTPException(400, "报告尚未生成，无法提取跟踪事项")
+    existing = session.exec(
+        select(Note).where(
+            Note.user_id == user.id,
+            Note.source_report_id == report_id,
+            Note.note_type == "action",
+        )
+    ).all()
+    return {
+        "items": _tracking_candidates(report),
+        "existing": [n.model_dump() for n in existing],
+        "report_version": report.version,
+        "note": (
+            "只保存用户选择的条目；没有明确日期的条目不会编造复查日期，"
+            "“下一次财报后”等会保存为事件条件。"
+        ),
+    }
+
+
+@router.post("/reports/{report_id}/tracking-notes")
+def generate_tracking_notes(
+    report_id: int,
+    data: Optional[TrackingSaveRequest] = None,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """保存用户选择的跟踪事项（复用 Note）。
+
+    无 body 时保留旧接口行为（保存全部提取项），便于已有调用兼容；新界面始终
+    先预览并提交勾选结果。
+    """
     report = _owned(session, report_id, user)
     if not report.report_md:
         raise HTTPException(400, "报告尚未生成，无法提取行动项")
 
-    # 防止重复创建：已存在则直接返回
     existing = session.exec(
         select(Note).where(
             Note.user_id == user.id,
@@ -397,11 +588,24 @@ def generate_tracking_notes(
     if existing:
         return {"reused": True, "created": False, "notes": [n.model_dump() for n in existing]}
 
-    items = _extract_action_items(report.report_md)
+    if data is not None:
+        items = [
+            {
+                "text": item.text,
+                "metric": item.metric,
+                "review_date": item.review_date,
+                "trigger_condition": item.trigger_condition,
+                "symbol": item.symbol,
+                "status": item.status,
+            }
+            for item in data.items
+            if item.text.strip()
+        ]
+    else:
+        items = _tracking_candidates(report)
     if not items:
-        raise HTTPException(400, "报告中未找到「行动项」或「Action Items」章节，无法提取跟踪事项")
+        raise HTTPException(400, "未找到可保存的跟踪事项（行动项/跟踪指标章节）")
 
-    # 确定 symbol
     symbol = report.symbol
     if not symbol and report.related_holding_id:
         h = session.get(Holding, report.related_holding_id)
@@ -413,25 +617,37 @@ def generate_tracking_notes(
 
     notes: List[Note] = []
     holdings = session.exec(select(Holding).where(Holding.user_id == user.id)).all()
-    for item in dict.fromkeys(items):
-        item_symbol, item_holding_id = symbol, report.related_holding_id
+    for item in items:
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        item_symbol = item.get("symbol") or symbol
+        item_holding_id = report.related_holding_id
         if report.template_key == "portfolio-review":
-            matches = re.findall(r"\b(A|HK|US|FUND|CRYPTO):([A-Za-z0-9.\-]+)", item)
+            matches = re.findall(r"\b(A|HK|US|FUND|CRYPTO):([A-Za-z0-9.\-]+)", text)
             matched = [h for h in holdings if (h.market.value, h.symbol) in matches]
             if len({(h.market, h.symbol) for h in matched}) == 1:
                 item_symbol = matched[0].symbol
                 item_holding_id = matched[0].id if len(matched) == 1 else None
-        title = item[:40] + ("…" if len(item) > 40 else "")
-        content = f"{item}\n\n---\n来源：{source_label}（{report_date}）"
+        title = text[:40] + ("…" if len(text) > 40 else "")
+        content = f"{text}\n\n---\n来源：{source_label}（{report_date}，v{report.version}）"
+        review_date = item.get("review_date")
+        if review_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", str(review_date)):
+            # Never silently keep a malformed/guessed date.
+            review_date = None
         note = Note(
             user_id=user.id,
             title=title,
             content=content,
             note_type="action",
-            status="active",
+            status=item.get("status") or "active",
             source_report_id=report_id,
             related_holding_id=item_holding_id,
             symbol=item_symbol,
+            metric=item.get("metric"),
+            review_date=review_date,
+            trigger_condition=item.get("trigger_condition"),
+            report_version=report.version,
         )
         session.add(note)
         notes.append(note)
@@ -452,6 +668,15 @@ def cancel_report(
     report = _owned(session, report_id, user)
     if report.status not in ("running", "queued"):
         return {"ok": True, "message": "任务已结束，无需取消"}
+    if report.execution_mode == "multi_agent":
+        engine = session.get_bind()
+        result = research_jobs.cancel(engine, report.id, user.id)
+        session.expire_all()
+        return result
+
+    # Standard background task: stop its polling loop before provider cancel,
+    # so a late provider response cannot overwrite the cancelled status.
+    research_jobs.request_cancel(report.id)
 
     # 解析 BYOK 配置用于 cancel
     from research_service import _resolve_report_ai_key
@@ -479,6 +704,10 @@ def cancel_report(
     report.updated_at = datetime.utcnow()
     if not cancelled_provider:
         report.error_message = "已在平台侧标记取消（Provider 不支持或取消失败）"
+    research_events.append_event(
+        session, report, "cancelled", "cancelled",
+        report.error_message or "Provider 已确认取消",
+        {"provider_cancelled": cancelled_provider}, commit=False)
     session.add(report)
     session.commit()
     return {"ok": True, "provider_cancelled": cancelled_provider}

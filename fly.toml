@@ -30,4 +30,7 @@ primary_region = "nrt"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "512mb"            # pandas/akshare 略吃内存；不够就 fly scale memory 1024
+  memory = "512mb"            # 标准研究够用；多 Agent（TradingAgents）建议 1GB：
+                              #   fly scale memory 1024
+                              # 多 Agent 的 Python 依赖装在镜像内的独立 venv，
+                              # 缓存在 /data/tradingagents（持久卷）。

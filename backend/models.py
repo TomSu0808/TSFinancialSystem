@@ -5,7 +5,7 @@
 import re
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 
 from sqlmodel import Field, SQLModel
 from sqlalchemy import UniqueConstraint
@@ -195,6 +195,12 @@ class Note(SQLModel, table=True):
     note_type: str = Field(default="general")  # thesis/risk/review/action/observation/general
     status: str = Field(default="active")       # active/resolved/invalidated/archived
     tags: Optional[str] = Field(default=None)   # 逗号分隔
+    # 跟踪事项（复用决策日志，不新建第二套跟踪表）
+    metric: Optional[str] = None                # 观察指标
+    review_date: Optional[str] = None           # YYYY-MM-DD，或为空
+    trigger_condition: Optional[str] = None     # 事件/指标触发条件
+    report_version: Optional[int] = None        # 产生该事项的研究版本
+    last_reviewed_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -355,6 +361,10 @@ class NoteCreate(SQLModel):
     note_type: str = "general"
     status: str = "active"
     tags: Optional[str] = None
+    metric: Optional[str] = None
+    review_date: Optional[str] = None
+    trigger_condition: Optional[str] = None
+    report_version: Optional[int] = None
 
 
 class NoteUpdate(SQLModel):
@@ -366,6 +376,11 @@ class NoteUpdate(SQLModel):
     note_type: Optional[str] = None
     status: Optional[str] = None
     tags: Optional[str] = None
+    metric: Optional[str] = None
+    review_date: Optional[str] = None
+    trigger_condition: Optional[str] = None
+    report_version: Optional[int] = None
+    last_reviewed_at: Optional[datetime] = None
 
 
 class ResearchStatus(str, Enum):
@@ -406,9 +421,72 @@ class ResearchReport(SQLModel, table=True):
     base_url: Optional[str] = None        # BYOK 自定义 base URL
     user_ai_key_id: Optional[int] = Field(default=None, index=True)  # FK → UserAIKey.id
     provider_response_id: Optional[str] = None
+    # 研究连续性与执行引擎。旧报告这些字段为空，可继续按原 Markdown 展示。
+    parent_report_id: Optional[int] = Field(default=None, foreign_key="researchreport.id", index=True)
+    version: int = Field(default=1)
+    execution_mode: str = Field(default="standard")   # standard | multi_agent
+    engine: Optional[str] = None                      # ai_provider | TradingAgents
+    engine_version: Optional[str] = None
+    engine_commit: Optional[str] = None
+    report_json: Optional[str] = None                 # 本次生成的结构化摘要（缺失时降级正文）
+    multi_agent_json: Optional[str] = None            # 各角色观点与分歧
+    input_snapshot_json: Optional[str] = None         # 提交 AI 前的数据快照与覆盖说明
+    usage_json: Optional[str] = None                  # 原始 usage 汇总
+    budget_json: Optional[str] = None                 # 限额与停止原因
+    source_status_json: Optional[str] = None          # 实际检索状态，不伪造“已核验”
+    data_cutoff: Optional[str] = None
+    idempotency_key: Optional[str] = Field(default=None, index=True)
+    progress_stage: Optional[str] = None              # 最近真实阶段（事件表为完整记录）
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ResearchRunEvent(SQLModel, table=True):
+    """研究任务的真实后台事件；前端进度只读这里，不生成虚假百分比。"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    report_id: int = Field(foreign_key="researchreport.id", index=True)
+    seq: int = Field(default=0)
+    stage: str = ""
+    status: str = ""                 # started/completed/failed/cancelled/info
+    message: str = ""
+    payload_json: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ResearchMessage(SQLModel, table=True):
+    """报告内追问。每条消息独立保存，不覆盖原报告；一个报告一条连续对话。"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    report_id: int = Field(foreign_key="researchreport.id", index=True)
+    role: str = ""                   # user | assistant
+    content: str = ""
+    status: str = Field(default="completed")  # queued/running/completed/failed/cancelled
+    request_id: Optional[str] = Field(default=None, index=True)
+    provider_response_id: Optional[str] = None
+    sources_json: Optional[str] = None
+    new_sources_json: Optional[str] = None
+    data_as_of: Optional[str] = None
+    used_web_search: bool = Field(default=False)
+    search_status: Optional[str] = None
+    context_compressed: bool = Field(default=False)
+    error_message: Optional[str] = None
+    usage_json: Optional[str] = None
+    budget_json: Optional[str] = None
+    cancelled_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ResearchPreference(SQLModel, table=True):
+    """用户可编辑的研究偏好；不从资产规模推断。"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True, unique=True)
+    investment_goal: Optional[str] = None
+    holding_period: Optional[str] = None
+    risk_preference: Optional[str] = None
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -424,6 +502,57 @@ class ResearchRunCreate(SQLModel):
     extra_instruction: Optional[str] = None
     use_web_search: bool = True
     display_currency: Currency = Currency.CNY
+    execution_mode: str = "standard"       # standard | multi_agent
+    include_holding_context: bool = True
+    idempotency_key: Optional[str] = None
+
+
+class ResearchPreviewRequest(SQLModel):
+    template_key: str
+    target_name: Optional[str] = None
+    symbol: Optional[str] = None
+    market: Optional[str] = None
+    related_holding_id: Optional[int] = None
+    report_language: ReportLanguage = ReportLanguage.zh
+    display_currency: Currency = Currency.CNY
+    execution_mode: str = "standard"
+    include_holding_context: bool = True
+    use_web_search: bool = True
+    ai_provider: Optional[str] = None
+    ai_model: Optional[str] = None
+
+
+class ResearchUpdateRequest(SQLModel):
+    extra_instruction: Optional[str] = None
+    ai_provider: Optional[str] = None
+    ai_model: Optional[str] = None
+    use_web_search: bool = True
+    idempotency_key: Optional[str] = None
+
+
+class ResearchMessageCreate(SQLModel):
+    question: str
+    use_web_search: bool = False
+    request_id: Optional[str] = None
+
+
+class ResearchPreferenceUpdate(SQLModel):
+    investment_goal: Optional[str] = None
+    holding_period: Optional[str] = None
+    risk_preference: Optional[str] = None
+
+
+class TrackingItem(SQLModel):
+    text: str
+    metric: Optional[str] = None
+    review_date: Optional[str] = None
+    trigger_condition: Optional[str] = None
+    symbol: Optional[str] = None
+    status: str = "active"
+
+
+class TrackingSaveRequest(SQLModel):
+    items: List[TrackingItem]
 
 
 class ResearchReportCreate(SQLModel):

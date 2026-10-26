@@ -240,3 +240,25 @@ FinancialSystem/
 
 组合摘要的 `as_of` 来自保存的输入数据时点，`latest_task` 独立于旧成功报告。新报告采用固定八节排版契约。
 使用方法、计算限制、发布配置及验收说明见 [每日盈亏与组合分析](docs/daily-pnl-and-portfolio-analysis.md)。
+
+---
+
+## 8. AI 投研 v2（2026-10）
+
+投研页从“模板列表”升级为任务入口，并保留全部 AI Berkshire 模板：
+
+- 四个默认任务：研究公司、分析财报、检查持仓、复查投资逻辑。
+- 提交前输入预览：`POST /api/research/preview`，不调用模型、不写数据库。
+- 报告结构化摘要与正文同一次生成；解析失败保留 Markdown 并降级。
+- 报告内追问：`researchmessage` 独立存储，不覆盖原报告。
+- 研究更新：`parent_report_id` + `version` 保留版本链。
+- 跟踪事项：复用 `Note`，新增指标、复查日期、事件条件、研究版本，先预览再选择保存。
+- 多 Agent：只在 `investment-team` 模板中，固定 TradingAgents 提交
+  `e8f5503e9b86d5c2710b0c76b1f686703968c9df`，独立 Worker 子进程执行，
+  默认关闭 social，多空/风险各 1 轮，无资产写接口。
+- 进度来自 `researchrunevent` 真实事件；用量按 Provider 原始 usage 汇总；
+  费用未知时不估算；支持调用/输出/时间/费用预算与取消。
+- 数据库启动迁移新增报告版本/结构化/用量/预算字段，以及追问、事件、偏好表。
+
+详细配置、迁移、API、回滚和验证边界见
+[docs/ai-research-and-tradingagents.md](docs/ai-research-and-tradingagents.md)。

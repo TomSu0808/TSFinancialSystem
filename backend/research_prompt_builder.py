@@ -8,6 +8,7 @@ Assembles the final AI research prompt from:
 The original skill content is NEVER modified — only wrapped with platform data.
 Attribution: Research framework adapted from xbtlin/ai-berkshire, MIT License.
 """
+from typing import Optional
 
 _DISCLAIMER_ZH = (
     "\n\n---\n"
@@ -223,6 +224,22 @@ stating the report is for research and review and does not constitute investment
 """
 
 
+def _platform_boundary(lang: str) -> str:
+    if lang == "en":
+        return (
+            "## Platform Boundary\n\n"
+            "You are a research assistant. You cannot and must not place orders, cancel orders, "
+            "transfer funds, or modify holdings, cash or transactions. Do not output executable "
+            "trade instructions or claim that any recommendation has been executed. Suggestions "
+            "are research views for the user to evaluate."
+        )
+    return (
+        "## 平台边界\n\n"
+        "你是研究助手，不能也不会下单、撤单、转账或修改持仓/现金/交易记录。"
+        "不得输出可执行交易指令，不得声称任何建议已被执行。所有建议都只是供用户评估的研究观点。"
+    )
+
+
 def build_prompt(
     skill_md: str,
     target_name: str,
@@ -233,6 +250,13 @@ def build_prompt(
     report_language: str = "zh",
     extra_instruction: str = "",
     is_portfolio: bool = False,
+    data_cutoff: str = "",
+    is_update: bool = False,
+    previous_report_md: str = "",
+    preferences: str = "",
+    include_holding_context: bool = True,
+    search_requested: Optional[bool] = None,
+    search_supported: Optional[bool] = None,
 ) -> str:
     """Assemble the final prompt for the AI provider.
 
@@ -248,19 +272,48 @@ def build_prompt(
       ---
 
       # Execution Requirements
-      <language, source standards, extra instruction, disclaimer>
+      <language, source standards, structured summary, extra instruction, disclaimer>
     """
     # Build target line
     sym_part = f" ({symbol}" + (f", {market}" if market else "") + ")" if symbol else ""
     target_line = f"**Research Target**: {target_name}{sym_part}"
 
     # Context section
-    if portfolio_ctx:
+    if not include_holding_context:
+        context_body = (
+            "\n*(The user chose not to include personal holding data. "
+            "Proceed with public information only.)*\n"
+            if report_language == "en" else
+            "\n*（用户选择不携带个人持仓信息；请仅基于公开资料研究。）*\n"
+        )
+    elif portfolio_ctx:
         context_body = portfolio_ctx
     elif holding_ctx:
         context_body = holding_ctx
     else:
         context_body = "\n*(No holding data available — proceeding with public information only.)*\n"
+
+    cutoff_line = ""
+    if data_cutoff:
+        cutoff_line = (
+            f"\n**Data cutoff / snapshot**: {data_cutoff}\n"
+            if report_language == "en" else
+            f"\n**数据截止/快照时点**：{data_cutoff}\n"
+        )
+
+    prefs_block = ""
+    if preferences:
+        title = "## Saved Research Preferences" if report_language == "en" else "## 已保存的研究偏好"
+        prefs_block = f"\n\n{title}\n\n{preferences}"
+
+    previous_block = ""
+    if is_update and previous_report_md:
+        title = "## Previous Report (baseline, not verified current fact)" if report_language == "en" else "## 上一版报告（作为基线，不等于最新事实）"
+        trimmed = previous_report_md[:30000]
+        previous_block = (
+            f"\n\n{title}\n\n{trimmed}\n\n"
+            + ("The previous report ends here.\n" if report_language == "en" else "上一版报告结束。\n")
+        )
 
     extra_title = "## Additional Instructions" if report_language == "en" else "## 额外要求"
     extra_block = f"\n\n{extra_title}\n\n{extra_instruction}" if extra_instruction else ""
@@ -269,6 +322,28 @@ def build_prompt(
         if report_language == "en"
         else "\n\n最终语言提醒：最终报告必须使用简体中文输出，不要输出英文报告。"
     )
+
+    import research_structured
+
+    search_block = ""
+    if search_requested is not None:
+        if report_language == "en":
+            search_block = (
+                "\n\n## Retrieval Status\n\n"
+                f"- External search requested: {bool(search_requested)}.\n"
+                f"- Provider search supported by this system: {bool(search_supported)}.\n"
+                "- A requested search is not a successful search. Only cite sources actually "
+                "returned; if none were returned, say so and do not fabricate links or "
+                "mark content as verified."
+            )
+        else:
+            search_block = (
+                "\n\n## 检索状态\n\n"
+                f"- 本次是否请求联网：{bool(search_requested)}。\n"
+                f"- 本系统该 Provider 是否接入联网检索：{bool(search_supported)}。\n"
+                "- 请求联网不等于检索成功。只有实际返回的来源才能引用；没有返回来源时必须说明，"
+                "不得编造链接，也不得把内容标记为“已核验”。"
+            )
 
     return (
         f"{_priority_language_block(report_language)}\n\n"
@@ -280,8 +355,11 @@ def build_prompt(
         "---\n\n"
         "# Platform Context\n\n"
         "以下是本资产管理平台注入的用户数据上下文。\n\n"
-        f"{target_line}\n\n"
-        f"{context_body}\n\n"
+        f"{target_line}\n"
+        f"{cutoff_line}\n"
+        f"{context_body}\n"
+        f"{prefs_block}"
+        f"{previous_block}\n\n"
         "---\n\n"
         "# Execution Requirements\n\n"
         "你现在不是在 Claude Code slash command 中执行，而是在 Web 投研系统中执行。\n"
@@ -292,9 +370,82 @@ def build_prompt(
         f"{_portfolio_loop_requirements(report_language) if is_portfolio else _research_loop_requirements(report_language)}"
         f"{extra_block}"
         f"{_portfolio_editorial_contract(report_language) if is_portfolio else ''}"
+        f"\n\n{_platform_boundary(report_language)}"
+        f"\n\n{research_structured.structured_output_requirements(report_language, is_update=is_update)}"
+        f"{chr(10) + research_structured.update_requirements(report_language) if is_update else ''}"
         f"{_disclaimer(report_language)}\n\n"
         f"{final_language_guard}\n\n"
         "---\n"
         "*Research framework adapted from [xbtlin/ai-berkshire](https://github.com/xbtlin/ai-berkshire), "
         "MIT License.*"
+    )
+
+
+def build_followup_prompt(
+    report_md: str,
+    input_context_md: str,
+    report_title: str,
+    question: str,
+    history: str = "",
+    report_language: str = "zh",
+    use_web_search: bool = False,
+    data_as_of: str = "",
+    context_compressed: bool = False,
+    search_supported: bool = False,
+) -> str:
+    """Build a focused follow-up prompt that treats the saved report as context."""
+    import research_structured
+
+    zh = report_language != "en"
+    if zh:
+        header = (
+            "# 报告内追问\n\n"
+            f"你正在回答关于已保存报告「{report_title}」的追问。"
+            "不要默认重写整篇报告，只回答用户当前问题。\n\n"
+            f"**报告数据时点**：{data_as_of or '未知'}\n\n"
+            "## 已保存报告\n\n"
+        )
+        history_title = "## 既有对话"
+        context_title = "## 原报告输入快照"
+        question_title = "## 用户追问"
+        compressed_note = (
+            "\n> 既有对话因长度限制已做可追溯压缩；原始消息仍保存在数据库中。\n"
+            if context_compressed else ""
+        )
+    else:
+        header = (
+            "# Follow-up on a Saved Report\n\n"
+            f"You are answering a question about the saved report \"{report_title}\". "
+            "Do not rewrite the whole report unless asked; answer the specific question.\n\n"
+            f"**Report data as of**: {data_as_of or 'unknown'}\n\n"
+            "## Saved report\n\n"
+        )
+        history_title = "## Prior conversation"
+        context_title = "## Original input snapshot"
+        question_title = "## User question"
+        compressed_note = (
+            "\n> Prior conversation was compressed traceably for length; all original "
+            "messages remain stored.\n" if context_compressed else ""
+        )
+
+    return (
+        header
+        + (report_md or "")[:40000]
+        + f"\n\n{context_title}\n\n"
+        + (input_context_md or "*(no saved input snapshot)*")[:20000]
+        + f"\n\n{history_title}\n\n"
+        + (history or "*(no prior messages)*")
+        + compressed_note
+        + f"\n\n{question_title}\n\n{question}\n\n"
+        + research_structured.followup_requirements(report_language, use_web_search)
+        + ("\n\n**Retrieval capability:** this system's Provider search support is "
+           f"{bool(search_supported)}. Requested does not mean successful."
+           if report_language == "en" and use_web_search else
+           ("\n\n**检索能力**：本系统该 Provider 是否接入联网检索："
+            f"{bool(search_supported)}。请求联网不等于检索成功。"
+            if use_web_search else ""))
+        + "\n\n"
+        + _platform_boundary(report_language)
+        + "\n\n"
+        + _disclaimer(report_language)
     )

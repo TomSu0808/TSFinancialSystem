@@ -93,7 +93,13 @@ def _sync_id(provider: str) -> str:
     return f"sync-{provider}-{int(time.time() * 1000)}"
 
 
-def _store_sync_response(provider: str, model: str, text: str, sources: Optional[List[Dict[str, str]]] = None) -> str:
+def _store_sync_response(
+    provider: str,
+    model: str,
+    text: str,
+    sources: Optional[List[Dict[str, str]]] = None,
+    usage: Optional[Dict[str, Any]] = None,
+) -> str:
     response_id = _sync_id(provider)
     _SYNC_RESPONSES[response_id] = {
         "id": response_id,
@@ -102,8 +108,73 @@ def _store_sync_response(provider: str, model: str, text: str, sources: Optional
         "model": model,
         "output_text": text,
         "sources": sources or [],
+        "usage": usage,
     }
     return response_id
+
+
+def provider_supports_web_search(provider: Optional[str]) -> bool:
+    """Only the OpenAI Responses path wires a web-search tool today.
+
+    The UI and source status must reflect this instead of treating the toggle as
+    a successful search.
+    """
+    return normalize_provider(provider) == "gpt" and AI_ENABLE_WEB_SEARCH
+
+
+def _usage_dict(value: Any) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    # Test doubles / SDK proxies occasionally expose arbitrary attributes.
+    # Never recurse into them or we can walk an endless mock graph.
+    if type(value).__module__.startswith(("unittest.mock", "mock")):
+        return None
+    for attr in ("model_dump", "to_dict", "dict"):
+        fn = getattr(value, attr, None)
+        if callable(fn):
+            try:
+                data = fn()
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                pass
+    data: Dict[str, Any] = {}
+    for key in (
+        "input_tokens", "output_tokens", "total_tokens",
+        "prompt_tokens", "completion_tokens", "input_tokens_details",
+        "output_tokens_details", "prompt_tokens_details", "completion_tokens_details",
+        "cache_read_input_tokens", "cache_creation_input_tokens",
+    ):
+        val = getattr(value, key, None)
+        if val is None:
+            continue
+        if isinstance(val, (int, float, str)):
+            data[key] = val
+        elif isinstance(val, dict):
+            data[key] = val
+    return data or None
+
+
+def extract_usage(response: Any, provider: Optional[str] = None, model: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Normalize provider usage without double-counting cached tokens."""
+    raw = _usage_dict(getattr(response, "usage", None))
+    if raw is None and isinstance(response, dict):
+        raw = response.get("usage")
+    if raw is None:
+        return None
+    try:
+        import research_usage
+        return research_usage.normalize_usage(
+            raw,
+            provider=provider,
+            model=model,
+            calls=1,
+            output_chars=len(extract_output_text(response) or ""),
+        )
+    except Exception:
+        return None
 
 
 def start_research(
@@ -175,7 +246,8 @@ def _start_openai_compatible(provider: str, prompt: str, model: str, api_key: st
         messages=[{"role": "user", "content": prompt}],
     )
     text = response.choices[0].message.content or ""
-    return _store_sync_response(provider, model, text)
+    usage = extract_usage(response, provider=provider, model=model)
+    return _store_sync_response(provider, model, text, usage=usage)
 
 
 def _start_claude(prompt: str, model: str, api_key: Optional[str] = None) -> str:
@@ -205,7 +277,18 @@ def _start_claude(prompt: str, model: str, api_key: Optional[str] = None) -> str
         for item in data.get("content", [])
         if item.get("type") == "text"
     )
-    return _store_sync_response("claude", model, text)
+    usage = None
+    raw_usage = data.get("usage")
+    if raw_usage:
+        try:
+            import research_usage
+            usage = research_usage.normalize_usage(
+                raw_usage, provider="claude", model=model,
+                calls=1, output_chars=len(text),
+            )
+        except Exception:
+            usage = None
+    return _store_sync_response("claude", model, text, usage=usage)
 
 
 def test_provider_connection(

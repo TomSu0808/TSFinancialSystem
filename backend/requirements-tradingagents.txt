@@ -1,0 +1,3 @@
+# 多 Agent 研究引擎，固定到审核过的上游提交；不在运行时追踪 main。
+# 该文件安装到独立虚拟环境（TradingAgents 要求 pandas 3，而后端仍使用 pandas 2）。
+tradingagents @ git+https://github.com/TauricResearch/TradingAgents.git@e8f5503e9b86d5c2710b0c76b1f686703968c9df

@@ -20,9 +20,9 @@ const NOTE_TYPES = [
 ]
 
 const NOTE_STATUSES = [
-  { value: 'active',      label: '跟踪中', color: 'green' },
-  { value: 'resolved',    label: '已解决', color: 'blue' },
-  { value: 'invalidated', label: '已证伪', color: 'red' },
+  { value: 'active',      label: '待核实', color: 'orange' },
+  { value: 'resolved',    label: '已核实', color: 'green' },
+  { value: 'invalidated', label: '假设失效', color: 'red' },
   { value: 'archived',    label: '已归档', color: 'default' },
 ]
 
@@ -274,6 +274,7 @@ export default function Notes() {
                   </div>
                   <Space size={4} style={{ flexWrap: 'wrap' }}>
                     {note.symbol && <Tag style={{ fontSize: 11 }}>{note.symbol}</Tag>}
+                    {note.report_version && <Tag color="gold" style={{ fontSize: 11 }}>研究 v{note.report_version}</Tag>}
                     {note.tags && note.tags.split(',').filter(Boolean).map((t, i) => (
                       <Tag key={i} style={{ fontSize: 11, color: '#888' }}>{t.trim()}</Tag>
                     ))}
@@ -283,6 +284,13 @@ export default function Notes() {
                       </Tooltip>
                     )}
                   </Space>
+                  {(note.metric || note.review_date || note.trigger_condition) && (
+                    <div style={{ marginTop: 6, padding: '6px 8px', background: '#fafafa', borderRadius: 6, fontSize: 11, color: '#595959' }}>
+                      {note.metric && <div><b>观察指标：</b>{note.metric}</div>}
+                      {note.review_date && <div><b>复查日期：</b>{note.review_date}</div>}
+                      {note.trigger_condition && <div><b>触发条件：</b>{note.trigger_condition}</div>}
+                    </div>
+                  )}
                   <div style={{ marginTop: 8, color: '#bbb', fontSize: 11, textAlign: 'right' }}>
                     {fmtDate(note.updated_at)}
                   </div>
@@ -333,6 +341,21 @@ export default function Notes() {
               </Form.Item>
             </Col>
           </Row>
+          <Row gutter={8}>
+            <Col xs={24} sm={12}>
+              <Form.Item name="metric" label="观察指标（可选）">
+                <Input placeholder="如 季度营收增速、FCF 利润率" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="review_date" label="复查日期（可选）">
+                <Input placeholder="YYYY-MM-DD；不知道就不要填" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="trigger_condition" label="事件条件（可选）">
+            <Input placeholder="如：下一次财报发布后；不需要确切日期" />
+          </Form.Item>
           <Text type="secondary" style={{ fontSize: 11 }}>
             关联持仓和来源报告可从持仓页「投资笔记」或投研页「生成跟踪事项」自动填入。
           </Text>

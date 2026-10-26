@@ -28,3 +28,6 @@ frontend/dist/
 .vscode/
 .DS_Store
 ._*
+
+# TradingAgents 用户隔离缓存/检查点/记忆（运行时生成）
+backend/tradingagents_data/

@@ -49,8 +49,10 @@ The hosted version supports registration, login, HTTPS, and isolated multi-user 
 | Cash ledger | Track cash per account and currency; net sale proceeds remain in the account, while withdrawals reduce cash separately. Includes calibration, ledger history, and overdraft checks. |
 | Mobile workflows | Five-tab bottom navigation, holding/cash/transaction cards, expandable details, transaction pagination, collapsed filters, and stacked entry forms. |
 | Decision log | Track thesis, risk, review, action items, and observations, linked to symbols or holdings. |
-| AI research workspace | Generate Chinese or English research reports with GPT, DeepSeek, GLM, Claude, or other OpenAI-compatible providers. |
-| AI action loop | Extract action items from AI reports into the decision log and track their status over time. |
+| AI research workspace | Four task entries (company / earnings / portfolio / thesis) with every AI Berkshire template still available; preview the exact data sent before submitting. Supports GPT, DeepSeek, GLM, Claude, and other OpenAI-compatible providers. |
+| Structured reports and follow-ups | Each report opens with a structured summary (conclusion, sourced facts, risks, impact, next watch) and labels facts, analysis, and assumptions separately. Ask follow-up questions inside a report; answers are stored separately and never overwrite it. |
+| Research and tracking loop | "Update this research" creates a new version with a preserved version chain, and tracking items are previewed, selected, and saved into the decision log. Missing dates are never invented. |
+| Multi-agent collaboration | The investment-committee template can run a pinned TradingAgents workflow in an isolated worker subprocess: social disabled by default, one research and one risk round, no asset write access, per-account memory and cache isolation. |
 | Privacy and security | JWT auth, per-user isolation, amount masking, dark mode, email verification, password recovery, and BYOK. |
 | Self-hosting | One Docker image serves the React frontend and FastAPI backend. SQLite is the default, with PostgreSQL available through `DATABASE_URL`. |
 
@@ -61,8 +63,11 @@ The hosted version supports registration, login, HTTPS, and isolated multi-user 
 3. Import historical transactions with CSV when migrating existing records.
 4. Quotes refresh after transaction changes; use the Dashboard refresh button to update FX or retry unavailable quotes.
 5. Review total assets, returns, allocation, net-worth trend, and data freshness.
-6. Generate AI research for important holdings and save action items into the decision log.
-7. Export a full-account JSON backup when you need to migrate or archive data.
+6. Generate research from the AI Research task entries and expand "review this input" before submitting.
+7. Read the structured summary, ask follow-up questions in the report, or run "Update this research" to verify new material.
+8. Preview and select tracking items to save into the decision log.
+9. Export a full-account JSON backup when you need to migrate or archive data.
+
 
 ## Page Overview
 
@@ -72,7 +77,7 @@ The hosted version supports registration, login, HTTPS, and isolated multi-user 
 | Platforms | Organize assets by broker, bank, wallet, or custom account. |
 | Holding detail | Manage manual assets and inspect derived holdings, cost, P&L, research summaries, and per-currency cash accounts. |
 | Transactions | Record, search, filter, and import buy / sell / dividend / deposit / withdraw / cash-adjustment records; the buy/sell form shows current holdings and cash impact. |
-| AI Research | Select a template, choose a symbol or portfolio, and generate structured Markdown reports. |
+| AI Research | Task-first research for a company, earnings, portfolio, or thesis; input preview, structured summaries, report follow-ups, versioned updates, and tracking items. The investment-committee template can run a pinned TradingAgents multi-agent workflow. |
 | Decision Log | Track thesis, risks, reviews, action items, and links to holdings or AI reports. |
 
 ## Sales, Cash, and Withdrawals
@@ -98,6 +103,25 @@ Price/allocation alerts were removed on 2026-10-09, including their pages, APIs,
 | Crypto | CoinGecko Free API | Supports common symbols and CoinGecko IDs. |
 | USD/CNY FX | open.er-api.com, with Bank of China fallback | Used for CNY / USD display conversion. |
 | AI reports | User-configured AI provider | BYOK supported. AI output is not investment advice. |
+
+## AI Research v2 and TradingAgents
+
+Research starts from a task instead of a template list; every AI Berkshire template remains under "All research tools":
+
+- **Research a company** (deep company research), **Review earnings** (earnings review), **Check my portfolio** (portfolio review), and **Revisit the thesis** (thesis tracker).
+- Opening research from a holding pre-fills the target. Ambiguous name, symbol, or market requires an explicit holding choice; the system never guesses.
+- Before submitting, expand the input preview to see the exact holdings, cost, cash, prior research, notes, and data cutoff included. Personal holding context can be turned off.
+- The report opens with the conclusion, sourced key facts, risks, impact on your holding or objective, and next watch items. Facts, analysis, and assumptions are labeled separately, and sources are never marked "verified".
+- Follow-up questions live inside the report; the first question automatically carries the saved report and its input snapshot, and answers never overwrite the report. Search is off by default; when enabled, any newly retrieved sources and their retrieval time are listed.
+- "Update this research" creates a new version from the old report as a baseline and keeps the version chain. When no new material was retrieved, the report says so instead of just changing the date.
+- Tracking items reuse the decision log: candidates are previewed, then selected and saved by the user, with optional metric, review date, and event condition.
+- Standard and multi-agent runs both execute in the background: submission returns immediately and the UI polls real events, so no manual refresh is needed.
+
+**Investment-committee multi-agent**: only the `investment-team` template offers "multi-agent collaboration", which calls a pinned commit of [TradingAgents](https://github.com/TauricResearch/TradingAgents) (`e8f5503e9b86d5c2710b0c76b1f686703968c9df`). Analysts default to fundamentals, market, and institutional news (social disabled), with one research-debate and one risk-debate round; the strategy node returns research views and scenarios only. The worker runs in its own subprocess, has no asset database access, and isolates memory, cache, and checkpoints per account.
+
+**Cost and budget**: usage comes from each provider's raw usage, cached tokens are not double-counted, and cost is only calculated when `AI_PRICE_TABLE_JSON` covers the model and usage is complete. Otherwise it is shown as unknown. Per-run call, output-token, time, and cost limits stop further steps; cancellation terminates the worker or calls the provider cancel API.
+
+See [docs/ai-research-and-tradingagents.md](docs/ai-research-and-tradingagents.md) for configuration, migration, APIs, rollback, and verification limits.
 
 ## Quick Start
 
@@ -151,6 +175,14 @@ For local development, copy `backend/.env.example` to `backend/.env`. In product
 | `AUTO_REFRESH_ENABLED` | Enables scheduled refresh. |
 | `AUTO_REFRESH_TIME` | Daily refresh time in `HH:MM` format. |
 | `AUTO_REFRESH_TIMEZONE` | Timezone for scheduled refresh. Defaults to `Asia/Shanghai`. |
+| `RESEARCH_MAX_LLM_CALLS` | Per-run model call limit; defaults to 12 for standard and 60 for multi-agent. |
+| `RESEARCH_MAX_OUTPUT_TOKENS` | Per-run output token limit; defaults to 120000. |
+| `RESEARCH_MAX_SECONDS` | Per-run time limit; defaults to 1800s standard and 3600s multi-agent. |
+| `RESEARCH_MAX_BUDGET` | Optional per-run cost cap; requires a price table or the run is refused. |
+| `AI_PRICE_TABLE_JSON` | Per-million-token prices by provider/model; cost is unknown when unset. |
+| `TRADINGAGENTS_PYTHON` | Python 3.11+ environment with TradingAgents installed; Docker uses `/opt/tradingagents-venv/bin/python`. |
+| `TRADINGAGENTS_DATA_ROOT` | Isolated directory for multi-agent memory, cache, checkpoints, and results. |
+| `TRADINGAGENTS_MAX_TOOL_ROUNDS` | Tool-call rounds per analyst; defaults to 8. |
 
 ## PostgreSQL Deployment
 
@@ -179,6 +211,14 @@ fly deploy
 ```
 
 For real email delivery, also configure `EMAIL_ENABLED`, `EMAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, and `SMTP_PASSWORD`.
+
+The Docker image installs the pinned TradingAgents release into its own virtualenv. Multi-agent runs use more memory, so on Fly.io:
+
+```bash
+fly scale memory 1024
+```
+
+If you do not use multi-agent, deploy with `fly deploy --build-arg INSTALL_TRADINGAGENTS=0` to skip the install and keep the image smaller. The UI then reports the engine as unavailable while standard research keeps working.
 
 ## Tech Stack
 

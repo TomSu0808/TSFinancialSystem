@@ -8,7 +8,10 @@ from sqlmodel import Session, select
 
 from auth import get_current_user
 from database import get_session
-from models import Holding, Note, Platform, ResearchReport, Transaction, User, DailyPnl, Snapshot
+from models import (
+    Holding, Note, Platform, ResearchMessage, ResearchPreference, ResearchReport,
+    ResearchRunEvent, Transaction, User, DailyPnl, Snapshot,
+)
 
 router = APIRouter(prefix="/api/backup", tags=["backup"])
 
@@ -68,8 +71,18 @@ def export_backup(
             for h in holds
         ],
         "notes": [
-            {"title": n.title, "content": n.content,
-             "created_at": _dt(n.created_at), "updated_at": _dt(n.updated_at)}
+            {
+                "title": n.title, "content": n.content,
+                "note_type": n.note_type, "status": n.status, "tags": n.tags,
+                "symbol": n.symbol,
+                "metric": n.metric,
+                "review_date": n.review_date,
+                "trigger_condition": n.trigger_condition,
+                "report_version": n.report_version,
+                "related_holding_ref": n.related_holding_id,
+                "source_report_ref": n.source_report_id,
+                "created_at": _dt(n.created_at), "updated_at": _dt(n.updated_at),
+            }
             for n in notes
         ],
         "transactions": [
@@ -87,6 +100,7 @@ def export_backup(
         ],
         "research_reports": [
             {
+                "ref": r.id,
                 "template_key": r.template_key,
                 "title": r.title,
                 "target_name": r.target_name,
@@ -101,11 +115,57 @@ def export_backup(
                 "sources_json": r.sources_json,
                 "provider": r.provider,
                 "model": r.model,
+                "parent_ref": r.parent_report_id,
+                "version": r.version,
+                "execution_mode": r.execution_mode,
+                "engine": r.engine,
+                "engine_version": r.engine_version,
+                "engine_commit": r.engine_commit,
+                "report_json": r.report_json,
+                "multi_agent_json": r.multi_agent_json,
+                "input_snapshot_json": r.input_snapshot_json,
+                "usage_json": r.usage_json,
+                "budget_json": r.budget_json,
+                "source_status_json": r.source_status_json,
+                "data_cutoff": r.data_cutoff,
                 "created_at": _dt(r.created_at),
                 "updated_at": _dt(r.updated_at),
                 "completed_at": _dt(r.completed_at) if r.completed_at else None,
             }
             for r in reports
+        ],
+        "research_messages": [
+            {
+                "report_ref": m.report_id,
+                "role": m.role,
+                "content": m.content,
+                "status": m.status,
+                "request_id": m.request_id,
+                "sources_json": m.sources_json,
+                "new_sources_json": m.new_sources_json,
+                "data_as_of": m.data_as_of,
+                "used_web_search": m.used_web_search,
+                "search_status": m.search_status,
+                "context_compressed": m.context_compressed,
+                "error_message": m.error_message,
+                "usage_json": m.usage_json,
+                "budget_json": m.budget_json,
+                "cancelled_at": _dt(m.cancelled_at) if m.cancelled_at else None,
+                "created_at": _dt(m.created_at),
+                "updated_at": _dt(m.updated_at),
+            }
+            for m in session.exec(select(ResearchMessage).where(
+                ResearchMessage.user_id == user.id)).all()
+        ],
+        "research_preferences": [
+            {
+                "investment_goal": pref.investment_goal,
+                "holding_period": pref.holding_period,
+                "risk_preference": pref.risk_preference,
+                "updated_at": _dt(pref.updated_at),
+            }
+            for pref in session.exec(select(ResearchPreference).where(
+                ResearchPreference.user_id == user.id)).all()
         ],
     }
 
@@ -116,6 +176,8 @@ class ImportPayload(BaseModel):
     notes: List[Dict[str, Any]] = []
     transactions: List[Dict[str, Any]] = []
     research_reports: List[Dict[str, Any]] = []
+    research_messages: List[Dict[str, Any]] = []
+    research_preferences: List[Dict[str, Any]] = []
     daily_pnl: List[Dict[str, Any]] = []
     snapshots: List[Dict[str, Any]] = []
 
@@ -128,7 +190,10 @@ def import_backup(
 ) -> Dict[str, Any]:
     """覆盖式恢复：先清空当前用户的全部数据，再按备份重建。"""
     # 1) 清空当前用户数据（先子后父）
-    for model in (DailyPnl, Snapshot, ResearchReport, Transaction, Holding, Note, Platform):
+    for model in (
+        ResearchMessage, ResearchRunEvent, ResearchPreference, DailyPnl, Snapshot,
+        ResearchReport, Transaction, Holding, Note, Platform,
+    ):
         for row in session.exec(select(model).where(model.user_id == user.id)).all():
             session.delete(row)
     session.commit()
@@ -181,12 +246,22 @@ def import_backup(
             note=t.get("note"), created_at=_parse_dt(t.get("created_at")),
         ))
 
-    # 5) 重建心得
+    # 5) 重建心得（报告引用在报告恢复后再映射）
+    pending_note_report_refs = []
     for n in data.notes:
-        session.add(Note(
+        note = Note(
             user_id=user.id, title=n.get("title"), content=n.get("content", ""),
+            note_type=n.get("note_type", "general"), status=n.get("status", "active"),
+            tags=n.get("tags"), symbol=n.get("symbol"),
+            metric=n.get("metric"), review_date=n.get("review_date"),
+            trigger_condition=n.get("trigger_condition"),
+            report_version=n.get("report_version"),
+            related_holding_id=hold_map.get(n.get("related_holding_ref")),
             created_at=_parse_dt(n.get("created_at")), updated_at=_parse_dt(n.get("updated_at")),
-        ))
+        )
+        session.add(note)
+        if n.get("source_report_ref") is not None:
+            pending_note_report_refs.append((note, n.get("source_report_ref")))
 
     session.commit()
 
@@ -197,10 +272,11 @@ def import_backup(
     from cash_service import rebuild_sale_cash
     rebuild_sale_cash(session, user.id)
 
-    # 7) 重建投研报告（provider_response_id 不恢复，相关联 holding 不重映射）
+    # 7) 重建投研报告（先建记录，再恢复版本关系；provider_response_id 不恢复）
+    report_map: Dict[Any, int] = {}
     for r in data.research_reports:
         completed_at_raw = r.get("completed_at")
-        session.add(ResearchReport(
+        report = ResearchReport(
             user_id=user.id,
             template_key=r.get("template_key", ""),
             title=r.get("title", ""),
@@ -216,11 +292,76 @@ def import_backup(
             sources_json=r.get("sources_json"),
             provider=r.get("provider"),
             model=r.get("model"),
+            parent_report_id=None,
+            version=r.get("version", 1),
+            execution_mode=r.get("execution_mode", "standard"),
+            engine=r.get("engine"),
+            engine_version=r.get("engine_version"),
+            engine_commit=r.get("engine_commit"),
+            report_json=r.get("report_json"),
+            multi_agent_json=r.get("multi_agent_json"),
+            input_snapshot_json=r.get("input_snapshot_json"),
+            usage_json=r.get("usage_json"),
+            budget_json=r.get("budget_json"),
+            source_status_json=r.get("source_status_json"),
+            data_cutoff=r.get("data_cutoff"),
             created_at=_parse_dt(r.get("created_at")),
             updated_at=_parse_dt(r.get("updated_at")),
             completed_at=_parse_dt(completed_at_raw) if completed_at_raw else None,
-        ))
+        )
+        session.add(report)
+        session.commit()
+        session.refresh(report)
+        if r.get("ref") is not None:
+            report_map[r.get("ref")] = report.id
+    for r in data.research_reports:
+        old_ref = r.get("ref")
+        parent_ref = r.get("parent_ref")
+        if old_ref in report_map and parent_ref in report_map:
+            report = session.get(ResearchReport, report_map[old_ref])
+            if report:
+                report.parent_report_id = report_map[parent_ref]
+                session.add(report)
+    for note, old_report_ref in pending_note_report_refs:
+        if old_report_ref in report_map:
+            note.source_report_id = report_map[old_report_ref]
+            session.add(note)
+    session.commit()
 
+    # 7b) 恢复报告追问消息与研究偏好
+    for m in data.research_messages:
+        report_id = report_map.get(m.get("report_ref"))
+        if report_id is None:
+            continue
+        cancelled_raw = m.get("cancelled_at")
+        session.add(ResearchMessage(
+            user_id=user.id,
+            report_id=report_id,
+            role=m.get("role", "assistant"),
+            content=m.get("content", ""),
+            status=m.get("status", "completed"),
+            request_id=m.get("request_id"),
+            sources_json=m.get("sources_json"),
+            new_sources_json=m.get("new_sources_json"),
+            data_as_of=m.get("data_as_of"),
+            used_web_search=bool(m.get("used_web_search")),
+            search_status=m.get("search_status"),
+            context_compressed=bool(m.get("context_compressed")),
+            error_message=m.get("error_message"),
+            usage_json=m.get("usage_json"),
+            budget_json=m.get("budget_json"),
+            cancelled_at=_parse_dt(cancelled_raw) if cancelled_raw else None,
+            created_at=_parse_dt(m.get("created_at")),
+            updated_at=_parse_dt(m.get("updated_at")),
+        ))
+    for pref in data.research_preferences:
+        session.add(ResearchPreference(
+            user_id=user.id,
+            investment_goal=pref.get("investment_goal"),
+            holding_period=pref.get("holding_period"),
+            risk_preference=pref.get("risk_preference"),
+            updated_at=_parse_dt(pref.get("updated_at")),
+        ))
     session.commit()
 
     # 历史盈亏保留；恢复后的持仓 ID 已变化，下一日重建计算基准。

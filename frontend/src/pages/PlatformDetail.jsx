@@ -668,16 +668,23 @@ export default function PlatformDetail() {
         width={420}
         footer={
           briefHolding?.symbol ? (
-            <Space>
+            <Space wrap>
               <Button size="small" onClick={() => navigate(`/notes?symbol=${briefHolding.symbol}`)}>
                 查看全部相关笔记
               </Button>
-              <Button size="small" onClick={() => navigate('/research')}>
-                去投研工作台
+              <Button
+                size="small"
+                type="primary"
+                onClick={() => navigate(`/research?template=investment-research&holding_id=${briefHolding.id}`)}
+              >
+                研究此持仓
+              </Button>
+              <Button size="small" onClick={() => navigate(`/research?template=thesis-tracker&holding_id=${briefHolding.id}`)}>
+                复查投资逻辑
               </Button>
             </Space>
           ) : (
-            <Button size="small" onClick={() => navigate('/research')}>去投研工作台</Button>
+            <Button size="small" onClick={() => navigate(`/research?holding_id=${briefHolding?.id || ''}`)}>去投研工作台</Button>
           )
         }
       >
