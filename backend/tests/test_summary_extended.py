@@ -128,6 +128,56 @@ def test_top_movers_closed_holding_excluded(client, session):
     assert len(s["top_movers"]) == 0
 
 
+def test_top_movers_bought_today_measured_from_trade_price(client, session):
+    """今日买入的份额只算成交后涨跌，不能把买入前的下跌算成当日亏损。"""
+    from datetime import datetime
+    pid = _platform(client)
+    today = datetime.utcnow().date().isoformat()
+    r = client.post("/api/transactions", json={
+        "platform_id": pid, "action": "buy", "date": today,
+        "symbol": "GOOG", "name": "GOOG", "currency": "USD",
+        "quantity": 70, "price": 281.1})
+    assert r.status_code == 200
+    hid = r.json()["holding_id"]
+    h = session.get(Holding, hid)
+    h.current_price = 283.0
+    h.prev_close = 321.89
+    session.add(h)
+    session.commit()
+
+    s = client.get("/api/summary?currency=USD").json()
+    m = s["top_movers"][0]
+    # 70 * (283.0 - 281.1) = 133，而不是 70 * (283.0 - 321.89) = -2722.3
+    assert m["display_change"] == pytest.approx(133.0, abs=0.5)
+    assert m["change_pct"] == pytest.approx(0.68, abs=0.05)
+
+
+def test_top_movers_partial_buy_today(client, session):
+    """昨仓按昨收、今日加仓按成交价，分别计算当日贡献。"""
+    from datetime import datetime
+    pid = _platform(client)
+    hid = _holding(client, pid, quantity=100, cost_price=8)
+    h = session.get(Holding, hid)
+    h.current_price = 12.0
+    h.prev_close = 10.0
+    session.add(h)
+    session.commit()
+
+    today = datetime.utcnow().date().isoformat()
+    r = client.post("/api/transactions", json={
+        "platform_id": pid, "action": "buy", "date": today,
+        "symbol": "AAPL", "name": "Apple", "currency": "USD",
+        "quantity": 50, "price": 11.0})
+    assert r.status_code == 200
+
+    s = client.get("/api/summary?currency=USD").json()
+    m = s["top_movers"][0]
+    # 100 * (12-10) + 50 * (12-11) = 250
+    assert m["display_change"] == pytest.approx(250.0, abs=0.5)
+    # 期初市值 = 1000 + 今日买入成本 550 = 1550 → 250 / 1550 = 16.13%
+    assert m["change_pct"] == pytest.approx(16.13, abs=0.1)
+
+
 # ─── return_breakdown 测试 ────────────────────────────────────────────────────
 
 def test_return_breakdown_values(client):

@@ -697,15 +697,68 @@ def market_value(h: Holding) -> float:
     return 0.0
 
 
-def day_change(h: Holding) -> float:
-    """今日涨跌额（本币）。手填金额或缺昨收时记 0（Decimal 精度）。"""
+def _trade_value_in_holding_currency(t: "Transaction"):
+    """交易的持仓币种金额：买入为付出的成本，卖出为到手的金额（含费用）。
+
+    数量×价格本身就是持仓币种；手填 amount 是结算币种的实际净额，
+    跨币种时按 fx_rate 折回持仓币种。
+    """
+    from decimal_utils import to_d
+
+    qty, price, fee = to_d(t.quantity), to_d(t.price), to_d(t.fee)
+    if t.amount is not None:
+        cash = to_d(t.amount)
+        if t.cash_currency is not None and t.cash_currency != t.currency:
+            if not t.fx_rate:
+                return qty * price  # 缺汇率时退回不含费用的成交额
+            cash = cash / to_d(t.fx_rate)
+        return cash
+    if t.action == TxnAction.buy:
+        return qty * price + fee
+    return qty * price - fee
+
+
+def day_change(h: Holding, today_trades=None) -> float:
+    """今日涨跌额（本币）。
+
+    按昨收→现价计市值变动；当日买入/卖出的份额按成交价起算，只算持有
+    期间的涨跌，避免把成交前的行情算成当日盈亏：
+        现市值 + 当日卖出净额 − 当日买入净额 − 昨日收盘时的持仓市值
+    没有当日交易时退化为 数量 ×（现价 − 昨收）。
+    """
     if h.status == HoldingStatus.closed or h.manual_value is not None:
         return 0.0
-    if h.quantity is not None and h.current_price is not None and h.prev_close is not None:
-        from decimal_utils import d_mul, d_sub, to_float
-        price_diff = d_sub(h.current_price, h.prev_close)
-        return to_float(d_mul(h.quantity, price_diff))
-    return 0.0
+    trades = [
+        t for t in (today_trades or [])
+        if t.action in (TxnAction.buy, TxnAction.sell)
+    ]
+    if not trades:
+        if h.quantity is not None and h.current_price is not None and h.prev_close is not None:
+            from decimal_utils import d_mul, d_sub, to_float
+            price_diff = d_sub(h.current_price, h.prev_close)
+            return to_float(d_mul(h.quantity, price_diff))
+        return 0.0
+    if h.current_price is None:
+        return 0.0
+
+    from decimal_utils import to_d, to_float
+
+    bought_qty = sum((to_d(t.quantity) for t in trades if t.action == TxnAction.buy), to_d(0))
+    sold_qty = sum((to_d(t.quantity) for t in trades if t.action == TxnAction.sell), to_d(0))
+    prev_qty = to_d(h.quantity) - bought_qty + sold_qty
+    if prev_qty and h.prev_close is None:
+        return 0.0
+
+    baseline = prev_qty * to_d(h.prev_close)
+    bought = sum(
+        (_trade_value_in_holding_currency(t) for t in trades if t.action == TxnAction.buy),
+        to_d(0),
+    )
+    sold = sum(
+        (_trade_value_in_holding_currency(t) for t in trades if t.action == TxnAction.sell),
+        to_d(0),
+    )
+    return to_float(to_d(market_value(h)) + sold - bought - baseline)
 
 
 def cost_basis(h: Holding) -> Optional[float]:

@@ -13,6 +13,8 @@ from models import (
     HoldingStatus,
     Platform,
     Snapshot,
+    Transaction,
+    TxnAction,
     User,
     cost_basis,
     day_change,
@@ -67,6 +69,22 @@ def get_summary(
         ).all()
     }
 
+    # 当日买卖：今日新买入的份额从成交价起算涨跌，今日卖出的份额算到成交价为止。
+    today = datetime.utcnow().date().isoformat()
+    trades_by_holding: Dict[int, list] = {}
+    for t in session.exec(
+        select(Transaction).where(
+            Transaction.user_id == user.id,
+            Transaction.date == today,
+            Transaction.action.in_((TxnAction.buy, TxnAction.sell)),
+        )
+    ).all():
+        if t.holding_id is not None:
+            trades_by_holding.setdefault(t.holding_id, []).append(t)
+
+    def holding_day_change(h: Holding) -> float:
+        return day_change(h, trades_by_holding.get(h.id))
+
     cur_value: Dict[Currency, float] = {}
     cur_change: Dict[Currency, float] = {}
     plat_value_cny: Dict[int, float] = {}
@@ -80,7 +98,7 @@ def get_summary(
     realized_income_cny = 0.0
     for h in holdings:
         mv = market_value(h)
-        dc = day_change(h)
+        dc = holding_day_change(h)
         rate = to_cny.get(h.currency, 1.0)
         cur_value[h.currency] = cur_value.get(h.currency, 0.0) + mv
         cur_change[h.currency] = cur_change.get(h.currency, 0.0) + dc
@@ -142,13 +160,16 @@ def get_summary(
     open_holdings = [h for h in holdings if h.status == HoldingStatus.open]
     movers = []
     for h in open_holdings:
-        dc = day_change(h)
-        if dc == 0.0 or h.prev_close is None or h.current_price is None:
+        dc = holding_day_change(h)
+        if dc == 0.0 or h.current_price is None:
             continue
         rate = to_cny.get(h.currency, 1.0)
         display_change = to_display(dc * rate)
         display_val = to_display(market_value(h) * rate)
-        change_pct_h = (h.current_price - h.prev_close) / h.prev_close * 100
+        # 以当日开始时的持仓市值（昨仓按昨收 + 今日买入按成交价）为分母；
+        # 全部持有过昨收时即为证券的当日涨跌幅。
+        start_val = display_val - display_change
+        change_pct_h = (display_change / start_val * 100) if start_val else 0.0
         movers.append({
             "holding_id": h.id,
             "name": h.name,

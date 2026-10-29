@@ -98,7 +98,7 @@ FinancialSystem/
 
 **四个计算口径函数（改动需谨慎，前后端都依赖其语义）**：
 - `market_value(h)`：`manual_value` 优先，否则 `quantity × current_price`，都没有记 0。
-- `day_change(h)`：今日涨跌额 = `quantity × (current_price − prev_close)`；手填金额或缺昨收记 0。
+- `day_change(h, today_trades=None)`：今日涨跌额 = 昨收→现价的市值变动；当日买入的份额按成交价起算，当日卖出的份额算到成交价为止（`现市值 + 当日卖出净额 − 当日买入净额 − 昨日收盘持仓市值`）。手填金额记 0；无当日交易且缺昨收记 0。
 - `cost_basis(h)`：`quantity × cost_price`；缺任一返回 None。
 - `profit(h)`：`market_value − cost_basis`；成本未知返回 None。
 

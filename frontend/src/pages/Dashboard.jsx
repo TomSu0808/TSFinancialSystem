@@ -309,7 +309,7 @@ export default function Dashboard({ autoRefresh = false }) {
                   {up ? <ArrowUpOutlined /> : <ArrowDownOutlined />} {sym}{fmt(Math.abs(change))}
                 </span>
                 <span style={{ color: changeColor }}>({up ? '+' : ''}{summary?.change_pct ?? 0}%)</span>
-                <Tooltip title="今日涨跌 = 当日价格变动（昨收→现价 × 数量），与「每日盈亏」的累计收益日变化口径不同。">
+                <Tooltip title="今日涨跌 = 昨收→现价的市值变动；当日买入的份额按成交价起算，当日卖出的份额算到成交价为止。与「每日盈亏」的累计收益日变化口径不同。">
                   <span style={{ color: '#8c8c8c' }}>今日涨跌 <InfoCircleOutlined style={{ fontSize: 12 }} /></span>
                 </Tooltip>
                 <Button size="small" type="text" icon={<CalendarOutlined />} onClick={() => setPnlOpen(true)}>每日盈亏</Button>
