@@ -580,7 +580,7 @@ class UserAIKey(SQLModel, table=True):
     """用户自带 AI Provider API Key（BYOK）。同一用户同一 provider 只存一条。"""
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", index=True)
-    provider: str = Field(index=True)          # gpt / deepseek / glm / claude
+    provider: str = Field(index=True)          # gpt / deepseek
     encrypted_api_key: str                      # Fernet 加密，绝不明文存储
     key_last4: str = Field(default="")          # 明文后 4 位，用于前端展示
     base_url: Optional[str] = None

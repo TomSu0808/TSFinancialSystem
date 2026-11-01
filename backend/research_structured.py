@@ -395,6 +395,7 @@ def source_status_for_standard(
     use_web_search: bool,
     sources: List[Dict[str, Any]],
     search_supported: bool,
+    system_search: bool = False,
 ) -> Dict[str, Any]:
     retrieved_at = datetime.utcnow().isoformat() + "Z"
     if not use_web_search:
@@ -407,6 +408,18 @@ def source_status_for_standard(
             "未由系统抓取或核验。"
             if sources else
             "当前 Provider 未接入联网检索；本次结果中没有新增可核验来源。"
+        )
+    elif system_search and sources:
+        status = "sources_returned"
+        message = (
+            f"本系统通过 DeepSeek Search 抓取了 {len(sources)} 条外部资料并注入提示词；"
+            "链接可访问性尚未逐一核验。"
+        )
+    elif system_search:
+        status = "no_sources_returned"
+        message = (
+            "已执行系统检索，但没有取得可用结果；报告只依据平台上下文与模型知识，"
+            "不能视为已核验最新资料。"
         )
     elif sources:
         status = "sources_returned"
@@ -422,6 +435,7 @@ def source_status_for_standard(
         "source_count": len(sources or []),
         "retrieved_at": retrieved_at,
         "verified": False,
+        "system_search": bool(system_search),
     }
 
 

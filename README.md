@@ -49,7 +49,8 @@ The hosted version supports registration, login, HTTPS, and isolated multi-user 
 | Cash ledger | Track cash per account and currency; net sale proceeds remain in the account, while withdrawals reduce cash separately. Includes calibration, ledger history, and overdraft checks. |
 | Mobile workflows | Five-tab bottom navigation, holding/cash/transaction cards, expandable details, transaction pagination, collapsed filters, and stacked entry forms. |
 | Decision log | Track thesis, risk, review, action items, and observations, linked to symbols or holdings. |
-| AI research workspace | Four task entries (company / earnings / portfolio / thesis) with every AI Berkshire template still available; preview the exact data sent before submitting. Supports GPT, DeepSeek, GLM, Claude, and other OpenAI-compatible providers. |
+| AI research workspace | Four task entries (company / earnings / portfolio / thesis) with every AI Berkshire template still available; preview the exact data sent before submitting. Supports GPT and DeepSeek (deepseek-flash, i.e. V4.1-Flash-1017). |
+| Live web retrieval | With the switch on, DeepSeek research first pulls current pages through the DeepSeek Search API and injects dated results into the prompt; the sources are stored and marked "fetched by this system", never as verified. GPT uses OpenAI's own web search tool. |
 | Structured reports and follow-ups | Each report opens with a structured summary (conclusion, sourced facts, risks, impact, next watch) and labels facts, analysis, and assumptions separately. Ask follow-up questions inside a report; answers are stored separately and never overwrite it. |
 | Research and tracking loop | "Update this research" creates a new version with a preserved version chain, and tracking items are previewed, selected, and saved into the decision log. Missing dates are never invented. |
 | Multi-agent collaboration | The investment-committee template can run a pinned TradingAgents workflow in an isolated worker subprocess: social disabled by default, one research and one risk round, no asset write access, per-account memory and cache isolation. |
@@ -170,7 +171,9 @@ For local development, copy `backend/.env.example` to `backend/.env`. In product
 | `APP_BASE_URL` | Public URL used for email verification and password-reset links. |
 | `APP_ENCRYPTION_KEY` | Required in production to encrypt user AI API keys. |
 | `ALLOW_SYSTEM_AI_FALLBACK` | Allows fallback to a system-level AI key when a user has no key. Defaults to `false`. |
-| `AI_PROVIDER` | Default AI provider, such as `gpt`, `deepseek`, `glm`, or `claude`. |
+| `AI_PROVIDER` | Default AI provider: `gpt` or `deepseek`. |
+| `DEEPSEEK_MODEL` | DeepSeek model name; defaults to `deepseek-flash` (DeepSeek-V4.1-Flash-1017). |
+| `DEEPSEEK_SEARCH_ENABLED` | Enables the DeepSeek Search API for research retrieval. Defaults to `true`; billed per successful request. |
 | `EMAIL_ENABLED` | Enables SMTP email. When disabled, verification links are printed to logs. |
 | `AUTO_REFRESH_ENABLED` | Enables scheduled refresh. |
 | `AUTO_REFRESH_TIME` | Daily refresh time in `HH:MM` format. |

@@ -27,17 +27,11 @@ PROVIDER_MAP = {
     "gpt": "openai",
     "openai": "openai",
     "deepseek": "deepseek",
-    "claude": "anthropic",
-    "anthropic": "anthropic",
-    "glm": "glm-cn",
 }
 KEY_ENV = {
     "gpt": "OPENAI_API_KEY",
     "openai": "OPENAI_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
-    "claude": "ANTHROPIC_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "glm": "ZHIPU_CN_API_KEY",
 }
 ALL_PROVIDER_KEYS = (
     "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY",
@@ -127,16 +121,8 @@ def _provider_for(provider: str, base_url: Optional[str]) -> str:
         if base_url and "api.openai.com" not in base_url:
             return "openai_compatible"
         return "openai"
-    if provider in ("claude", "anthropic"):
-        return "anthropic"
     if provider == "deepseek":
         return "deepseek"
-    if provider == "glm":
-        if not base_url or "bigmodel" in base_url:
-            return "glm-cn"
-        if "z.ai" in base_url:
-            return "glm"
-        return "openai_compatible"
     return provider
 
 
@@ -144,16 +130,10 @@ def _key_env_for(provider: str, base_url: Optional[str]) -> str:
     ta_provider = _provider_for(provider, base_url)
     if ta_provider == "openai_compatible":
         return "OPENAI_COMPATIBLE_API_KEY"
-    if ta_provider == "anthropic":
-        return "ANTHROPIC_API_KEY"
     if ta_provider == "openai":
         return "OPENAI_API_KEY"
     if ta_provider == "deepseek":
         return "DEEPSEEK_API_KEY"
-    if ta_provider == "glm-cn":
-        return "ZHIPU_CN_API_KEY"
-    if ta_provider == "glm":
-        return "ZHIPU_API_KEY"
     return KEY_ENV.get(provider, "OPENAI_API_KEY")
 
 

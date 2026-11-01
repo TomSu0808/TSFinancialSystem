@@ -49,7 +49,8 @@ TSFinancialSystem 面向个人投资者，用来在一个私有 Web 应用中管
 | 现金账本 | 按「平台 + 币种」管理现金；卖出净额自动留在账户中，提现/出金单独扣减现金，支持现金校准、流水查询和透支校验。 |
 | 手机端操作 | 五栏底部导航，持仓、现金和交易卡片，展开详情、交易分页、折叠筛选及竖向录入表单。 |
 | 投资决策日志 | 用结构化笔记记录买入逻辑、风险、复盘、行动项和观察事项，并关联标的或持仓。 |
-| AI 投研工作台 | 四种任务入口（研究公司 / 财报 / 持仓 / 投资逻辑），保留全部 AI Berkshire 模板；提交前预览实际携带的数据，支持 GPT、DeepSeek、GLM、Claude 等 Provider。 |
+| AI 投研工作台 | 四种任务入口（研究公司 / 财报 / 持仓 / 投资逻辑），保留全部 AI Berkshire 模板；提交前预览实际携带的数据，支持 GPT 与 DeepSeek（deepseek-flash，即 V4.1-Flash-1017）。 |
+| 联网检索 | 开启开关后，DeepSeek 研究先由本系统调用 DeepSeek Search API 抓取最新网页，把带日期的结果注入提示词；来源落库并标注“系统抓取”，不会标记为已核验。GPT 使用 OpenAI 自带的联网工具。 |
 | 结构化报告与追问 | 报告顶部固定结构化摘要（结论、事实与来源、风险、影响、下一步），事实/分析/假设分开标注；可在报告内追问，回答独立保存、不覆盖原报告。 |
 | 研究与跟踪闭环 | 支持「更新这份研究」生成新版本并保留版本链；从报告中预览、勾选并保存跟踪事项到决策日志，没有明确日期时不编造日期。 |
 | 多 Agent 协作 | 投资委员会模板可调用固定版本 TradingAgents：独立 Worker 子进程、默认关闭 social、多空/风险各一轮、无资产写接口；用户缓存与记忆按账号隔离。 |
@@ -169,7 +170,9 @@ python dev.py setup
 | `APP_BASE_URL` | 生产环境中用于邮箱验证和找回密码链接的公开地址。 |
 | `APP_ENCRYPTION_KEY` | 生产环境必填，用于加密用户 AI API Key。 |
 | `ALLOW_SYSTEM_AI_FALLBACK` | 是否允许用户未配置 Key 时回退到系统级 AI Key，默认 `false`。 |
-| `AI_PROVIDER` | 默认 AI Provider，可选 `gpt`、`deepseek`、`glm`、`claude`。 |
+| `AI_PROVIDER` | 默认 AI Provider，可选 `gpt`、`deepseek`。 |
+| `DEEPSEEK_MODEL` | DeepSeek 模型名，默认 `deepseek-flash`（即 DeepSeek-V4.1-Flash-1017）。 |
+| `DEEPSEEK_SEARCH_ENABLED` | 是否启用 DeepSeek Search API 做联网检索，默认 `true`；按成功请求次数计费。 |
 | `EMAIL_ENABLED` | 是否启用 SMTP 邮件；未启用时验证链接会输出到日志。 |
 | `AUTO_REFRESH_ENABLED` | 是否启用定时刷新。 |
 | `AUTO_REFRESH_TIME` | 每日刷新时间，格式 `HH:MM`。 |

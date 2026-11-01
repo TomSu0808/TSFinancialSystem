@@ -106,7 +106,7 @@ def test_save_ai_key_returns_last4_not_plain(engine_byok, user_byok):
     resp = client.post("/api/settings/ai-keys", json={
         "provider": "deepseek",
         "api_key": "sk-1234567890abcdef",
-        "default_model": "deepseek-v4-pro",
+        "default_model": "deepseek-flash",
         "is_default": True,
     })
     assert resp.status_code == 200, resp.text
@@ -145,8 +145,8 @@ def test_delete_own_key(engine_byok, user_byok):
     """删除自己的 key 后列表为空。"""
     client = _make_client(engine_byok, user_byok)
     save_resp = client.post("/api/settings/ai-keys", json={
-        "provider": "glm",
-        "api_key": "glm-key-abcd1234",
+        "provider": "gpt",
+        "api_key": "sk-gpt-key-abcd1234",
         "is_default": False,
     })
     key_id = save_resp.json()["id"]
@@ -164,8 +164,8 @@ def test_cannot_delete_other_users_key(engine_byok, user_byok, user2_byok):
     """用户不能删除其他用户的 key。"""
     client1 = _make_client(engine_byok, user_byok)
     save_resp = client1.post("/api/settings/ai-keys", json={
-        "provider": "claude",
-        "api_key": "claude-key-xyz-0000",
+        "provider": "deepseek",
+        "api_key": "sk-deepseek-key-0000",
         "is_default": False,
     })
     key_id = save_resp.json()["id"]
@@ -221,7 +221,7 @@ def test_research_with_user_key_passes_api_key_to_start_research(engine_byok, us
     client.post("/api/settings/ai-keys", json={
         "provider": "deepseek",
         "api_key": "sk-user-deepseek-1234",
-        "default_model": "deepseek-v4-pro",
+        "default_model": "deepseek-flash",
         "is_default": True,
     })
 

@@ -35,15 +35,11 @@ const lsBool = (k) => localStorage.getItem(k) === '1'
 const AI_PROVIDER_OPTIONS = [
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'gpt', label: 'OpenAI (GPT)' },
-  { value: 'glm', label: 'GLM (智谱)' },
-  { value: 'claude', label: 'Claude (Anthropic)' },
 ]
 
 const AI_DEFAULT_MODELS = {
-  deepseek: 'deepseek-v4-pro',
+  deepseek: 'deepseek-flash',
   gpt: 'gpt-5.5',
-  glm: 'glm-4.6',
-  claude: 'claude-sonnet-4-5',
 }
 
 // 与后端 SECURITY_QUESTIONS 保持一致
@@ -730,7 +726,7 @@ export default function App() {
         )}
 
         {/* 添加 / 更新 Key 表单 */}
-        <Form form={aiKeyForm} layout="vertical" initialValues={{ provider: 'deepseek', default_model: 'deepseek-v4-pro', is_default: false }}>
+        <Form form={aiKeyForm} layout="vertical" initialValues={{ provider: 'deepseek', default_model: 'deepseek-flash', is_default: false }}>
           <Form.Item name="provider" label="Provider" rules={[{ required: true, message: '请选择 Provider' }]}>
             <Select
               options={AI_PROVIDER_OPTIONS}
@@ -745,7 +741,7 @@ export default function App() {
             <Input placeholder="https://api.example.com/v1" autoComplete="off" />
           </Form.Item>
           <Form.Item name="default_model" label="默认模型">
-            <Input placeholder="如 deepseek-v4-pro、gpt-5.5 等" autoComplete="off" />
+            <Input placeholder="如 deepseek-flash、gpt-5.5 等" autoComplete="off" />
           </Form.Item>
           <Form.Item name="is_default" label="设为全局默认 Key" valuePropName="checked">
             <Select style={{ width: 120 }}>

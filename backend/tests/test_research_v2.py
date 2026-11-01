@@ -54,7 +54,7 @@ def _completed_report(session, user, md, *, symbol="AAPL", template="investment-
         report_json=json.dumps(report_json, ensure_ascii=False) if report_json else None,
         sources_json=json.dumps(sources or [], ensure_ascii=False),
         provider="deepseek",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
         input_snapshot_json=json.dumps({
             "data_cutoff": "2026-10-26 00:00 UTC",
             "display_currency": "USD",
@@ -163,7 +163,9 @@ def test_preview_shows_holdings_flags_and_does_not_mutate(client, session, user)
     assert data["includes"]["holdings"] is True
     assert data["includes"]["cost"] is True
     assert data["target"]["holding_id"] == holding.id
-    assert data["web_search"]["provider_supports"] is False
+    # DeepSeek 现在由本系统的 Search API 抓取，预览如实标出这一点。
+    assert data["web_search"]["provider_supports"] is True
+    assert data["web_search"]["system_retrieval"] is True
     after = (
         len(session.exec(select(Holding)).all()),
         len(session.exec(select(Transaction)).all()),
@@ -243,8 +245,10 @@ def test_standard_run_does_not_mutate_assets_and_records_source_status(client, s
     parsed = json.loads(report["report_json"])
     assert parsed["summary"] == "估值合理"
     status = json.loads(report["source_status_json"])
-    assert status["status"] == "unsupported_provider"
+    # 已请求联网但系统检索没有拿到结果：必须是“未取得来源”，不能假装成功。
+    assert status["status"] == "no_sources_returned"
     assert status["verified"] is False
+    assert status["system_search"] is False
     after = (
         len(session.exec(select(Holding)).all()),
         len(session.exec(select(Transaction)).all()),
@@ -262,7 +266,6 @@ def test_followup_saves_separately_and_keeps_original_report(session, user):
     question = "如果资本开支继续增长，原结论会怎样变化？"
     answer = "资本开支上升会压低自由现金流，但需结合订单验证。"
     with patch("research_chat.ALLOW_SYSTEM_AI_FALLBACK", True), \
-         patch("ai_client.provider_supports_web_search", return_value=False), \
          patch("ai_client.start_research", return_value="chat-id"), \
          patch("ai_client.retrieve_response", return_value=_response(answer, sources=[])):
         assistant = research_chat.start_exchange(
@@ -278,7 +281,8 @@ def test_followup_saves_separately_and_keeps_original_report(session, user):
     assert messages[1].role == "assistant"
     assert messages[1].status == "completed"
     assert answer in messages[1].content
-    assert messages[1].search_status == "unsupported_provider"
+    # 已请求联网但检索没有结果 → 不能记为检索成功。
+    assert messages[1].search_status == "no_sources_returned"
 
 
 def test_followup_budget_stops_before_call(session, user, monkeypatch):
@@ -530,7 +534,7 @@ def test_tradingagents_worker_isolated_dirs_and_no_db_access(tmp_path, monkeypat
     monkeypatch.setenv("TRADINGAGENTS_DATA_ROOT", str(tmp_path / "ta-data"))
     payload = tradingagents_adapter.build_worker_payload(
         report_id=8, user_id=555, ticker="0700.HK", trade_date="2026-10-26",
-        asset_type="stock", provider="deepseek", model="deepseek-v4-pro",
+        asset_type="stock", provider="deepseek", model="deepseek-flash",
         base_url=None, report_language="zh", portfolio=None,
         limits={"max_calls": 5, "max_output_tokens": 1000, "max_seconds": 30},
         task_dir=Path(tmp_path / "task2"),
@@ -617,7 +621,7 @@ def test_multi_agent_service_submits_snapshot_and_finalizes(client, session, use
         "status": "completed", "state": state, "rating": "Hold",
         "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15, "calls": 1},
         "engine_version": "0.7.0", "engine_commit": "e8f5503e9b86d5c2710b0c76b1f686703968c9df",
-        "run_settings": {"quick_think_llm": "deepseek-v4-pro"}, "tool_usage": {"calls": 2},
+        "run_settings": {"quick_think_llm": "deepseek-flash"}, "tool_usage": {"calls": 2},
     })
     session.refresh(db_report)
     assert db_report.status == "completed"

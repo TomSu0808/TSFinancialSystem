@@ -4,6 +4,7 @@
 明确开启“补充检索”且 Provider 支持时才请求新资料，并标注新增来源与时间。
 """
 import json
+import os
 import threading
 import time
 from datetime import datetime
@@ -16,6 +17,7 @@ import research_events
 import research_prompt_builder
 import research_structured
 import research_usage
+import web_search
 from config import ALLOW_SYSTEM_AI_FALLBACK
 from crypto_utils import decrypt_secret
 from models import ResearchMessage, ResearchReport, User, UserAIKey
@@ -109,6 +111,12 @@ def _resolve_key(session: Session, report: ResearchReport) -> Tuple[Optional[str
         base_url = key.base_url or base_url
     elif not ALLOW_SYSTEM_AI_FALLBACK:
         raise RuntimeError("原报告没有关联的 AI Key，且系统未开启全局 Key 回退")
+    if not ai_client.is_supported_provider(provider):
+        raise RuntimeError(
+            f"这份报告当时使用的 Provider（{provider}）已停用，无法继续追问。"
+            f"目前仅支持 {' / '.join(ai_client.SUPPORTED_PROVIDERS)}；"
+            "请用新 Provider 重新发起同类研究。历史报告正文仍可正常查看。"
+        )
     return api_key, provider, base_url, model
 
 
@@ -288,6 +296,25 @@ def _run_exchange(
         ).all()
         history, compressed = _history_for_prompt(messages)
         data_as_of = _data_as_of(report)
+        # 与主报告一致：DeepSeek 经独立 Search API 抓取，GPT 走服务端 web_search。
+        retrieval: Optional[Dict[str, Any]] = None
+        if (
+            use_web_search
+            and ai_client.normalize_provider(provider) == "deepseek"
+            and web_search.search_enabled()
+        ):
+            retrieval = web_search.run_search(
+                queries=web_search.build_queries(
+                    report.target_name or report.title,
+                    report.symbol or "",
+                    report.market or "",
+                    report.template_key or "",
+                    report.report_language,
+                ),
+                api_key=api_key or os.getenv("DEEPSEEK_API_KEY", ""),
+                base_url=base_url,
+                ori_question=question[:128],
+            )
         prompt = research_prompt_builder.build_followup_prompt(
             report_md=report.report_md or "",
             input_context_md=report.input_context_md or "",
@@ -299,6 +326,7 @@ def _run_exchange(
             data_as_of=data_as_of,
             context_compressed=compressed,
             search_supported=ai_client.provider_supports_web_search(provider),
+            retrieval_md=web_search.retrieval_block(retrieval, report.report_language),
         )
         if _is_cancelled(session, assistant_id, cancel_flag):
             session.expire_all()
@@ -363,10 +391,14 @@ def _run_exchange(
             raise RuntimeError(f"Provider status: {status}")
 
         text = ai_client.extract_output_text(response) or ""
+        system_sources = web_search.to_sources(retrieval)
         sources = research_structured.attach_retrieval_metadata(
-            ai_client.extract_sources(response))
+            system_sources + ai_client.extract_sources(response))
         new_sources = _new_sources(report, sources)
         usage = ai_client.extract_usage(response, provider=provider, model=model)
+        billed = int((retrieval or {}).get("billed_requests") or 0)
+        if usage and billed:
+            usage["search_requests"] = billed
         cost = research_usage.calculate_cost(usage, provider, model)
         search_supported = ai_client.provider_supports_web_search(provider)
         if not use_web_search:
@@ -387,13 +419,19 @@ def _run_exchange(
             f"原报告数据时点 {report_as_of}"
         )
         if use_web_search and new_sources:
-            text = text.rstrip() + "\n\n---\n**新增来源（本次补充检索）**：\n" + "\n".join(
-                f"- [{s.get('title') or s.get('url')}]({s.get('url')})（获取于 {s.get('retrieved_at')}）"
+            label = (
+                "新增来源（本次系统检索抓取）" if system_sources
+                else "新增来源（本次补充检索）"
+            )
+            text = text.rstrip() + f"\n\n---\n**{label}**：\n" + "\n".join(
+                f"- [{s.get('title') or s.get('url')}]({s.get('url')})"
+                + (f"（{s['date']}，" if s.get("date") else "（")
+                + f"{s.get('via') or 'provider'}，获取于 {s.get('retrieved_at')}）"
                 for s in new_sources
             )
         elif use_web_search and not sources:
             text = text.rstrip() + (
-                "\n\n---\n> 本次请求了补充检索，但未返回可核验来源；回答不包含新增外部事实。"
+                "\n\n---\n> 本次请求了补充检索，但没有取得可核验来源；回答不包含新增外部事实。"
             )
 
         session.expire_all()

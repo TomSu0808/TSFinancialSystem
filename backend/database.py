@@ -192,6 +192,39 @@ def _migrate_add_user_id() -> None:
         conn.commit()
 
 
+def _migrate_ai_providers() -> None:
+    """只保留 gpt / deepseek 两个 Provider，并把 DeepSeek 默认模型收敛到 flash。
+
+    一次性、幂等：
+    - 删除 glm / claude 的已存 Key（这两个 Provider 已从系统中移除）。
+    - 把 DeepSeek Key 的 default_model 从已退役的别名改到 deepseek-flash。
+    - 历史投研报告不改写：当时用 v4-pro 生成的记录保留原样，追问仍可继续。
+    """
+    wanted = {"provider": "VARCHAR", "default_model": "VARCHAR"}
+    with engine.begin() as conn:
+        if not _table_exists(conn, "useraikey"):
+            return
+        for col, col_type in wanted.items():
+            if not _column_exists(conn, "useraikey", col):
+                return  # 表结构异常，交给 create_all
+        removed = conn.execute(
+            text('DELETE FROM "useraikey" WHERE lower(provider) IN (\'glm\', \'claude\', \'anthropic\', \'zhipu\')')
+        ).rowcount
+        conn.execute(
+            text(
+                'UPDATE "useraikey" SET default_model = :new '
+                "WHERE lower(provider) = 'deepseek' AND ("
+                "default_model IS NULL OR trim(default_model) = '' "
+                "OR lower(default_model) IN ("
+                "'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp')"
+                ")"
+            ),
+            {"new": "deepseek-flash"},
+        )
+    if removed:
+        print(f"[MIGRATE] 已移除 {removed} 条已停用 Provider（GLM/Claude）的 AI Key")
+
+
 def init_db() -> None:
     """建表（已存在则跳过）+ 轻量迁移。在应用启动时调用。"""
     # 确保模型已被导入并注册到 SQLModel.metadata
@@ -204,6 +237,7 @@ def init_db() -> None:
             conn.execute(text("ALTER TYPE txnaction ADD VALUE IF NOT EXISTS 'adjust'"))
             conn.execute(text("ALTER TYPE txnaction ADD VALUE IF NOT EXISTS 'cash_adjust'"))
     _migrate_add_user_id()  # 兼容 SQLite 和 PostgreSQL
+    _migrate_ai_providers()  # 只保留 gpt / deepseek，DeepSeek 默认模型收敛到 flash
     # 提醒功能已移除；解除旧记录对持仓的引用，避免阻止删除持仓或恢复备份。
     # 仅处理旧表，不再创建提醒表，保留历史提醒文本。
     with engine.begin() as conn:

@@ -52,9 +52,22 @@
 - 数据表：`researchmessage`，每条消息独立保存，关联报告和用户。
 - 一个报告一条连续对话；不覆盖原报告。
 - 首次提问自动携带原报告和 `input_snapshot_json`。
-- 默认不联网；用户可开启“补充联网核查”。只有真正返回的来源才标为新增来源，并记录获取时间。
+- 默认不联网；用户可开启“联网检索”。开启后 DeepSeek 由本系统调用 Search API 先抓取网页，再把带日期的结果注入提示词；只有真正返回的来源才标为新增来源，并记录抓取时间。
 - 历史过长时保留最早 2 条与最近 6 条，并标记“已压缩”；完整消息仍在数据库中。
 - 失败保留用户问题；取消按钮会记录 Provider 是否确认中断及可能仍计费的风险。
+
+### 4.1 联网检索（DeepSeek Search API）
+
+DeepSeek 的 Responses API `web_search` 工具仅在 `deepseek-v4-pro` 上可用，`deepseek-flash` 上不会真正检索。因此本系统对 DeepSeek 改用独立的 Search API：
+
+- 端点：`POST https://api.deepseek.com/v1/tools/search`，与模型同一个 Key；用户填的 `base_url` 若以 `/v1` 结尾会自动去掉。
+- 触发：仅当用户勾选“联网检索”且执行模式为 `standard`；多 Agent 走 TradingAgents 自带数据工具。
+- 查询：按模板与标的最多两条（财报/业绩类 + 最新消息类），结果按 URL 去重、摘要截断。
+- 注入：结果带标题、日期、URL、摘要写入提示词，并明确要求“优先据此作答、注明日期、未覆盖处标注未能检索到、不得编造”。
+- 落库：来源写入 `sources_json`（`via=deepseek_search`、`retrieved_at`、`verified=false`），预览快照记录查询、条数、计费请求数与错误。
+- 计费：按成功请求计费（$0.75/1000 次），失败与空结果不计费；`usage.search_requests` 记录计费次数，费用计算读取 `AI_PRICE_TABLE_JSON` 的 `search_per_1k`。
+- 失败处理：任何网络或接口错误都只记录在 `search_errors`，不中断研究，也不把“请求联网”当成“检索成功”。
+- 开关：`DEEPSEEK_SEARCH_ENABLED`（默认 true）、`DEEPSEEK_SEARCH_TIMEOUT`（默认 20 秒）。
 
 ### 5. 更新研究
 

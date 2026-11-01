@@ -33,7 +33,7 @@ function FeatureHighlights() {
   const items = [
     { color: '#e6f4ff', border: '#bae0ff', icon: '📊', title: '多平台聚合', desc: '券商、银行、钱包统一管理，一屏纵览全局' },
     { color: '#f6ffed', border: '#b7eb8f', icon: '⚡', title: '交易驱动', desc: '买卖流水自动更新持仓成本与已实现盈亏' },
-    { color: '#fff7e6', border: '#ffd591', icon: '🤖', title: 'AI 投研', desc: '接入 GPT / DeepSeek / Claude 生成结构化报告' },
+    { color: '#fff7e6', border: '#ffd591', icon: '🤖', title: 'AI 投研', desc: '接入 GPT / DeepSeek 生成结构化报告' },
     { color: '#f9f0ff', border: '#d3adf7', icon: '🔒', title: '私有部署', desc: '数据完全由你掌控，支持 Docker 一键自托管' },
   ]
   return (

@@ -37,6 +37,17 @@ def _clear_other_defaults(session: Session, user_id: int, keep_id: int) -> None:
             session.add(k)
 
 
+def _normalize_supported_provider(raw: str) -> str:
+    """只接受本系统已接入的 Provider；其余直接拒绝，避免存入无用的 Key。"""
+    provider = ai_client.normalize_provider(raw)
+    if not ai_client.is_supported_provider(provider):
+        raise HTTPException(
+            400,
+            f"不支持的 Provider：{raw}；目前仅支持 {' / '.join(ai_client.SUPPORTED_PROVIDERS)}",
+        )
+    return provider
+
+
 @router.get("/ai-keys", response_model=List[UserAIKeyRead])
 def list_ai_keys(
     session: Session = Depends(get_session),
@@ -55,7 +66,7 @@ def save_ai_key(
     user: User = Depends(get_current_user),
 ):
     """创建或更新当前用户某 provider 的 key（同 provider 只存一条，重复保存则更新）。"""
-    provider = ai_client.normalize_provider(data.provider)
+    provider = _normalize_supported_provider(data.provider)
     encrypted = encrypt_secret(data.api_key)
     last4 = data.api_key[-4:] if len(data.api_key) >= 4 else data.api_key
 
@@ -152,7 +163,7 @@ def test_ai_key(
 
     错误信息不包含 API Key 内容，截断并清洗后返回。
     """
-    provider = ai_client.normalize_provider(data.provider)
+    provider = _normalize_supported_provider(data.provider)
 
     if data.api_key:
         api_key = data.api_key

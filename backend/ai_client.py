@@ -1,10 +1,10 @@
 """AI provider client abstraction for research reports.
 
-Supported providers:
+Supported providers (only these two):
 - gpt: OpenAI Responses API, with optional web_search.
-- deepseek: OpenAI-compatible Chat Completions.
-- glm: OpenAI-compatible Chat Completions.
-- claude: Anthropic Messages API via requests.
+- deepseek: OpenAI-compatible Chat Completions; web retrieval goes through the
+  separate DeepSeek Search API (see web_search.py), because the Responses API
+  `web_search` tool is only available on deepseek-v4-pro.
 """
 import os
 import time
@@ -23,23 +23,25 @@ _SYNC_RESPONSES: Dict[str, Dict[str, Any]] = {}
 
 DEFAULT_MODELS = {
     "gpt": os.getenv("OPENAI_MODEL", os.getenv("AI_MODEL_GPT", "gpt-5.5")),
-    "deepseek": os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro"),
-    "glm": os.getenv("GLM_MODEL", "glm-4.6"),
-    "claude": os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5"),
+    # deepseek-flash 即 DeepSeek-V4.1-Flash-1017（官方推荐调用名）。
+    "deepseek": os.getenv("DEEPSEEK_MODEL", "deepseek-flash"),
 }
 
 PROVIDER_ALIASES = {
     "openai": "gpt",
     "gpt": "gpt",
     "deepseek": "deepseek",
-    "glm": "glm",
-    "claude": "claude",
-    "anthropic": "claude",
 }
+
+SUPPORTED_PROVIDERS = ("gpt", "deepseek")
 
 
 class AIServiceNotConfigured(Exception):
     pass
+
+
+def is_supported_provider(provider: Optional[str]) -> bool:
+    return normalize_provider(provider) in SUPPORTED_PROVIDERS
 
 
 def normalize_provider(provider: Optional[str] = None) -> str:
@@ -65,10 +67,6 @@ def is_configured(provider: Optional[str] = None, api_key: Optional[str] = None)
         return bool(os.getenv("OPENAI_API_KEY", ""))
     if provider_key == "deepseek":
         return bool(os.getenv("DEEPSEEK_API_KEY", ""))
-    if provider_key == "glm":
-        return bool(os.getenv("GLM_API_KEY", ""))
-    if provider_key == "claude":
-        return bool(os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("CLAUDE_API_KEY", ""))
     return False
 
 
@@ -114,12 +112,18 @@ def _store_sync_response(
 
 
 def provider_supports_web_search(provider: Optional[str]) -> bool:
-    """Only the OpenAI Responses path wires a web-search tool today.
+    """Whether this system wires retrieval for the provider.
 
-    The UI and source status must reflect this instead of treating the toggle as
-    a successful search.
+    GPT uses the OpenAI web_search tool. DeepSeek has no usable server-side
+    search on flash, so retrieval runs through its standalone Search API and
+    is always available when the switch is on.
     """
-    return normalize_provider(provider) == "gpt" and AI_ENABLE_WEB_SEARCH
+    provider_key = normalize_provider(provider)
+    if provider_key == "gpt":
+        return AI_ENABLE_WEB_SEARCH
+    if provider_key == "deepseek":
+        return AI_ENABLE_WEB_SEARCH and os.getenv("DEEPSEEK_SEARCH_ENABLED", "true").lower() != "false"
+    return False
 
 
 def _usage_dict(value: Any) -> Optional[Dict[str, Any]]:
@@ -204,16 +208,6 @@ def start_research(
             api_key=api_key or os.getenv("DEEPSEEK_API_KEY", ""),
             base_url=base_url or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
         )
-    if provider_key == "glm":
-        return _start_openai_compatible(
-            provider="glm",
-            prompt=prompt,
-            model=chosen_model,
-            api_key=api_key or os.getenv("GLM_API_KEY", ""),
-            base_url=base_url or os.getenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
-        )
-    if provider_key == "claude":
-        return _start_claude(prompt, chosen_model, api_key=api_key)
     raise AIServiceNotConfigured(f"Unsupported AI provider: {provider_key}")
 
 
@@ -250,47 +244,6 @@ def _start_openai_compatible(provider: str, prompt: str, model: str, api_key: st
     return _store_sync_response(provider, model, text, usage=usage)
 
 
-def _start_claude(prompt: str, model: str, api_key: Optional[str] = None) -> str:
-    key = api_key or os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("CLAUDE_API_KEY", "")
-    if not key:
-        raise AIServiceNotConfigured("Claude service is not configured. Please set ANTHROPIC_API_KEY.")
-
-    response = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json={
-            "model": model,
-            "max_tokens": int(os.getenv("CLAUDE_MAX_TOKENS", "8192")),
-            "messages": [{"role": "user", "content": prompt}],
-        },
-        timeout=int(os.getenv("AI_REQUEST_TIMEOUT", "300")),
-    )
-    if response.status_code >= 400:
-        raise RuntimeError(f"Claude API error {response.status_code}: {response.text[:500]}")
-    data = response.json()
-    text = "\n".join(
-        item.get("text", "")
-        for item in data.get("content", [])
-        if item.get("type") == "text"
-    )
-    usage = None
-    raw_usage = data.get("usage")
-    if raw_usage:
-        try:
-            import research_usage
-            usage = research_usage.normalize_usage(
-                raw_usage, provider="claude", model=model,
-                calls=1, output_chars=len(text),
-            )
-        except Exception:
-            usage = None
-    return _store_sync_response("claude", model, text, usage=usage)
-
-
 def test_provider_connection(
     provider: str,
     api_key: str,
@@ -313,38 +266,17 @@ def test_provider_connection(
                 messages=[{"role": "user", "content": "ping"}],
                 max_tokens=5,
             )
-        elif provider_key in ("deepseek", "glm"):
-            _base = base_url or (
-                os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-                if provider_key == "deepseek"
-                else os.getenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
-            )
+        elif provider_key == "deepseek":
+            _base = base_url or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
             client = _openai_client(api_key, base_url=_base)
             client.chat.completions.create(
                 model=test_model,
                 messages=[{"role": "user", "content": "ping"}],
                 max_tokens=5,
             )
-        elif provider_key == "claude":
-            resp = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": test_model,
-                    "max_tokens": 5,
-                    "messages": [{"role": "user", "content": "ping"}],
-                },
-                timeout=30,
-            )
-            if resp.status_code >= 400:
-                err = resp.json().get("error", {}).get("message", f"HTTP {resp.status_code}")
-                raise RuntimeError(str(err)[:150])
         else:
-            raise AIServiceNotConfigured(f"不支持的 provider: {provider_key}")
+            raise AIServiceNotConfigured(
+                f"不支持的 provider: {provider_key}；仅支持 {' / '.join(SUPPORTED_PROVIDERS)}")
 
         return {"ok": True, "message": "连接成功"}
 

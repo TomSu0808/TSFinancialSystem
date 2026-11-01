@@ -18,6 +18,24 @@
 
 <!-- 在下面这条横线下方追加新记录，保持最新在最上 -->
 
+## [功能] - 2026-11-01 IO 收敛为 GPT/DeepSeek、DeepSeek 联网检索、默认模型切到 flash
+
+### 类型：✨新增 / 💥破坏性变更
+
+- **改了什么**：
+  1. **Provider 只留两个**：`gpt` 与 `deepseek`。GLM / Claude 的代码分支、前端选项、TradingAgents 映射、`.env.example` 变量全部移除；`POST /api/settings/ai-keys` 对其它 Provider 直接返回 400。
+  2. **DeepSeek 模型只留 `deepseek-flash`**（即 DeepSeek-V4.1-Flash-1017，官方推荐调用名）。`deepseek-chat` / `deepseek-reasoner` / `deepseek-v4-pro` 不再出现在候选列表，后端兜底默认值、`.env`、价格示例同步更新。
+  3. **新增 DeepSeek 联网检索**：`backend/web_search.py` 调用 `POST /v1/tools/search`，把带标题、日期、URL、摘要的结果注入提示词；来源落库并标注 `via=deepseek_search` / `verified=false`；报告与追问共用同一套逻辑。
+  4. **启动迁移** `database._migrate_ai_providers()`：删除已停用 Provider（GLM/Claude）的 Key，把 DeepSeek Key 的 `default_model` 从已退役别名收敛到 `deepseek-flash`。历史投研报告不改写。
+  5. 用量与费用新增 `search_requests` 与 `search_per_1k` 单价项，检索成本可核验。
+- **为什么**：用户在投研页只能选到想要的模型；此前 DeepSeek 完全没有联网能力（Responses API 的 `web_search` 仅 v4-pro 支持，flash 上模型会直接回“无法搜索”），导致财报分析拿到的都是训练记忆里的旧信息。现在由平台自己抓取最新网页，并如实标注来源与抓取时间。
+- **影响范围**：`backend/ai_client.py`、`backend/web_search.py`（新增）、`backend/research_service.py`、`backend/research_chat.py`、`backend/research_prompt_builder.py`、`backend/research_structured.py`、`backend/research_usage.py`、`backend/tradingagents_adapter.py`、`backend/database.py`、`backend/routers/ai_keys.py`、`backend/models.py`、`backend/.env`、`backend/.env.example`、`frontend/src/App.jsx`、`frontend/src/pages/Research.jsx`、`frontend/src/pages/Login.jsx`、中英文 README、`docs/ai-research-and-tradingagents.md`、`backend/tests/test_web_search.py`（新增）。
+- **注意事项**：
+  - **破坏性**：已保存的 GLM / Claude Key 会在下次启动时被删除；删掉的 Key 需要重新配置才能恢复（本系统已不再支持这两个 Provider）。
+  - DeepSeek 检索按成功请求计费（$0.75/1000 次），2026-11-01 起正式收费。不勾选“联网检索”则不产生检索费用。
+  - 本地 `.env` 的 `DEEPSEEK_MODEL` 已改为 `deepseek-flash`；Fly.io 需 `fly deploy` 后首次启动才执行迁移。
+  - 无数据库结构变更。后端全量 427 项测试通过（新增 22 项检索/迁移/白名单测试，全部 mock，不产生真实检索费用）。
+
 ## [修复] - 2026-10-29 今日涨跌按成交价起算当日买入份额
 
 ### 类型：🐛修复

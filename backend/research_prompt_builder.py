@@ -257,6 +257,7 @@ def build_prompt(
     include_holding_context: bool = True,
     search_requested: Optional[bool] = None,
     search_supported: Optional[bool] = None,
+    retrieval_md: str = "",
 ) -> str:
     """Assemble the final prompt for the AI provider.
 
@@ -358,6 +359,7 @@ def build_prompt(
         f"{target_line}\n"
         f"{cutoff_line}\n"
         f"{context_body}\n"
+        f"{retrieval_md}"
         f"{prefs_block}"
         f"{previous_block}\n\n"
         "---\n\n"
@@ -392,6 +394,7 @@ def build_followup_prompt(
     data_as_of: str = "",
     context_compressed: bool = False,
     search_supported: bool = False,
+    retrieval_md: str = "",
 ) -> str:
     """Build a focused follow-up prompt that treats the saved report as context."""
     import research_structured
@@ -436,6 +439,7 @@ def build_followup_prompt(
         + f"\n\n{history_title}\n\n"
         + (history or "*(no prior messages)*")
         + compressed_note
+        + retrieval_md
         + f"\n\n{question_title}\n\n{question}\n\n"
         + research_structured.followup_requirements(report_language, use_web_search)
         + ("\n\n**Retrieval capability:** this system's Provider search support is "

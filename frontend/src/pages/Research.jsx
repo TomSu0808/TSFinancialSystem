@@ -49,26 +49,15 @@ const LANG_OPTIONS = [
 const PROVIDER_OPTIONS = [
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'gpt', label: 'GPT' },
-  { value: 'glm', label: 'GLM' },
-  { value: 'claude', label: 'Claude' },
 ]
 
 const MODEL_OPTIONS = {
   deepseek: [
-    { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro' },
-    { value: 'deepseek-v4-flash', label: 'deepseek-v4-flash' },
+    { value: 'deepseek-flash', label: 'deepseek-flash（V4.1-Flash-1017）' },
   ],
   gpt: [
     { value: 'gpt-5.5', label: 'gpt-5.5' },
     { value: 'gpt-5.4-mini', label: 'gpt-5.4-mini' },
-  ],
-  glm: [
-    { value: 'glm-4.6', label: 'glm-4.6' },
-    { value: 'glm-4-flash', label: 'glm-4-flash' },
-  ],
-  claude: [
-    { value: 'claude-sonnet-4-5', label: 'claude-sonnet-4-5' },
-    { value: 'claude-opus-4-1', label: 'claude-opus-4-1' },
   ],
 }
 
@@ -896,12 +885,14 @@ export default function Research() {
                               valuePropName="checked"
                               style={{ marginBottom: 2 }}
                             >
-                              <Checkbox>向 Provider 请求联网</Checkbox>
+                              <Checkbox>开启联网检索</Checkbox>
                             </Form.Item>
                             <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 8 }}>
-                              {currentProvider && currentProvider !== 'gpt'
-                                ? `当前 ${currentProvider} 未接入本系统联网检索；开启也只表示请求，不等于搜索成功。`
-                                : '联网开启不等于搜索成功；成功返回也不等于内容已核验。'}
+                              {!currentProvider || currentProvider === 'deepseek'
+                                ? 'DeepSeek 由本系统调用 Search API 抓取最新网页（每条成功查询单独计费），再把带日期的结果注入提示词；抓取失败时不会假装已联网。'
+                                : currentProvider === 'gpt'
+                                  ? 'GPT 使用 OpenAI 自带的 web_search 工具；返回来源不等于内容已核验。'
+                                  : '联网开启不等于搜索成功；成功返回也不等于内容已核验。'}
                             </Text>
                           </div>
                         ),
@@ -1246,6 +1237,7 @@ function SourcePanel({ report }) {
           {status.status || 'unknown'}
         </Tag>
         {status.requested && <Tag>已请求检索</Tag>}
+        {status.system_search && <Tag color="blue">系统已抓取</Tag>}
         {status.provider_supports_search === false && <Tag color="orange">Provider 不支持检索</Tag>}
         <Tag color="default">未标记为“已核验”</Tag>
         <Text type="secondary" style={{ fontSize: 11 }}>来源 {sources.length} 条</Text>
@@ -1262,6 +1254,8 @@ function SourcePanel({ report }) {
               style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}
             >
               <LinkOutlined /> {source.title || source.url}
+              {source.via === 'deepseek_search' ? ' · 系统检索' : ''}
+              {source.date ? ` · ${source.date.slice(0, 10)}` : ''}
               {source.retrieved_at ? ` · 获取于 ${fmtTime(source.retrieved_at)}` : ''}
             </a>
           ))}
@@ -1276,10 +1270,12 @@ function SourcePanel({ report }) {
             status.status === 'agent_data_tools'
               ? '多 Agent 数据工具已获取资料，但本轮未逐条核验引用可访问性；请以公司公告、财报和监管披露为准。'
               : status.status === 'not_requested'
-                ? '本次未请求联网检索，回答仅基于平台上下文与模型知识。'
+                ? '本次未开启联网检索，回答仅基于平台上下文与模型知识。'
                 : status.status === 'unsupported_provider'
                   ? '该 Provider 未接入本系统联网检索；报告中的来源为模型引用，未由系统抓取或核验。'
-                  : '没有可验证的新来源时，报告不会把模型知识包装成最新事实。'
+                  : status.status === 'no_sources_returned'
+                    ? '已执行联网检索，但没有取得可用结果；报告不会把模型知识包装成最新事实。'
+                    : '没有可验证的新来源时，报告不会把模型知识包装成最新事实。'
           }
         />
       )}
@@ -1611,6 +1607,7 @@ function ReportDetail({
             children: (
               <div style={{ fontSize: 11, lineHeight: 1.7 }}>
                 <div>模型调用：{usage?.usage?.calls ?? '未知'} 次；输入 {usage?.usage?.input_tokens ?? '未知'}，输出 {usage?.usage?.output_tokens ?? '未知'}，缓存读取 {usage?.usage?.cached_input_tokens ?? 0}。</div>
+                {usage?.usage?.search_requests ? <div>联网检索：{usage.usage.search_requests} 次成功请求（按每千次计价）。</div> : null}
                 <div>费用：{usage?.cost?.amount != null ? `${usage.cost.amount} ${usage.cost.currency}` : (usage?.cost?.reason || '未知')}</div>
                 {usage?.cost?.basis && <div>计价依据：{usage.cost.basis}</div>}
                 <div>预算状态：{budget.status || '未知'} {budget.stop_reasons?.length ? `；${budget.stop_reasons.join('；')}` : ''}</div>

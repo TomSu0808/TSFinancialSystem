@@ -19,6 +19,7 @@ def empty_usage() -> Dict[str, Any]:
         "total_tokens": 0,
         "calls": 0,
         "output_chars": 0,
+        "search_requests": 0,
         "models": [],
     }
 
@@ -90,7 +91,7 @@ def merge_usage(*items: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         for key in (
             "input_tokens", "output_tokens", "reasoning_tokens",
             "cached_input_tokens", "cache_creation_input_tokens",
-            "total_tokens", "calls", "output_chars",
+            "total_tokens", "calls", "output_chars", "search_requests",
         ):
             total[key] += _as_int(item.get(key))
         for model in item.get("models") or []:
@@ -124,8 +125,11 @@ def calculate_cost(
     """返回可核验的费用或明确的未知原因。
 
     价格配置示例（AI_PRICE_TABLE_JSON）：
-    {"deepseek": {"deepseek-v4-pro": {"input_per_1m": 0.28,
-      "output_per_1m": 0.42, "cached_input_per_1m": 0.028, "currency": "USD"}}}
+    {"deepseek": {"deepseek-flash": {
+      "input_per_1m": 0.15, "output_per_1m": 0.6, "cached_input_per_1m": 0.003,
+      "search_per_1k": 0.75, "currency": "USD"}}}
+
+    search_per_1k 是可选的：DeepSeek Search 按“成功请求”次数计费，不是按 token。
     """
     if not usage or not _as_int(usage.get("calls")):
         return {"amount": None, "currency": None, "basis": None, "reason": "无模型用量记录"}
@@ -141,6 +145,7 @@ def calculate_cost(
     output_tokens = _as_int(usage.get("output_tokens"))
     cached = _as_int(usage.get("cached_input_tokens"))
     cache_creation = _as_int(usage.get("cache_creation_input_tokens"))
+    search_requests = _as_int(usage.get("search_requests"))
     # 缓存输入通常是 input 的子集；按“未缓存输入 + 缓存读取 + 缓存写入”计价。
     uncached = max(0, input_tokens - cached)
 
@@ -149,6 +154,8 @@ def calculate_cost(
         required.append(("cached_input_per_1m", cached))
     if cache_creation:
         required.append(("cache_creation_per_1m", cache_creation))
+    if search_requests:
+        required.append(("search_per_1k", search_requests))
     missing = [key for key, tokens in required if tokens and price.get(key) is None]
     if missing:
         return {
@@ -158,16 +165,18 @@ def calculate_cost(
 
     amount = 0.0
     for key, tokens in required:
-        if tokens:
+        if key == "search_per_1k":
+            amount += tokens * float(price[key]) / 1_000.0
+        elif tokens:
             amount += tokens * float(price[key]) / 1_000_000.0
     return {
         "amount": round(amount, 6),
         "currency": price.get("currency") or "USD",
-        "basis": "按 AI_PRICE_TABLE_JSON 的每百万 token 单价计算",
+        "basis": "按 AI_PRICE_TABLE_JSON 的每百万 token 单价计算（检索按每千次计）",
         "reason": None,
         "price_snapshot": {k: price.get(k) for k in (
             "input_per_1m", "output_per_1m", "cached_input_per_1m",
-            "cache_creation_per_1m", "currency",
+            "cache_creation_per_1m", "search_per_1k", "currency",
         )},
     }
 

@@ -18,6 +18,7 @@ import research_structured
 import research_target
 import research_usage
 import tradingagents_adapter
+import web_search
 from ai_client import AIServiceNotConfigured
 from ai_berkshire_loader import get_skill_meta, load_skill
 from config import ALLOW_SYSTEM_AI_FALLBACK
@@ -171,6 +172,11 @@ def _resolve_ai(
 
     effective_model = ai_model or (user_key.default_model if user_key else None)
     model = ai_client.choose_model(provider, effective_model)
+    if not ai_client.is_supported_provider(provider):
+        raise AIServiceNotConfigured(
+            f"Provider {provider} 已停用；目前仅支持 "
+            f"{' / '.join(ai_client.SUPPORTED_PROVIDERS)}。请在个人资料 → AI 设置中重新配置。"
+        )
     return provider, user_key, user_api_key, user_base_url, model
 
 
@@ -520,10 +526,17 @@ def build_preview(
             "requested": bool(use_web_search),
             "provider": preview_provider,
             "provider_supports": ai_client.provider_supports_web_search(preview_provider),
+            "system_retrieval": (
+                preview_provider == "deepseek"
+                and bool(use_web_search)
+                and execution_mode == "standard"
+                and web_search.search_enabled()
+            ),
             "note": (
-                "联网开关只表示向 Provider 请求检索，不等于检索成功。"
-                if execution_mode != "multi_agent" else
                 "多 Agent 使用 TradingAgents 配置的数据工具，来源可访问性仍需自行核验。"
+                if execution_mode == "multi_agent" else
+                "提交时会先由本系统调用 DeepSeek Search 抓取最新网页，再把带日期的结果注入提示词；"
+                "抓取发生在提交之后，预览无法展示具体条目。"
             ),
         },
         "multi_agent": multi_preview,
@@ -590,6 +603,7 @@ def _build_input_snapshot(
     report_mode: str,
     parent_report_id: Optional[int],
     ta_info: Optional[Dict[str, Any]] = None,
+    retrieval: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     return {
         "schema_version": 2,
@@ -625,6 +639,14 @@ def _build_input_snapshot(
             "requested": bool(use_web_search),
             "provider": provider,
             "provider_supports": ai_client.provider_supports_web_search(provider),
+            "system_search": bool(retrieval and retrieval.get("results")),
+            "search_queries": (retrieval or {}).get("queries") or [],
+            "search_result_count": len((retrieval or {}).get("results") or []),
+            "search_billed_requests": int((retrieval or {}).get("billed_requests") or 0),
+            "search_errors": (retrieval or {}).get("errors") or [],
+            "search_retrieved_at": (retrieval or {}).get("retrieved_at"),
+            # 系统真实抓到的结果，落库后与模型自述来源合并展示。
+            "search_results": web_search.to_sources(retrieval),
         },
         "parent_report_id": parent_report_id,
         "multi_agent": ta_info or None,
@@ -667,8 +689,17 @@ def create_run(
     _validate_execution(target, template_key, execution_mode)
 
     if report_mode == "update" and parent_report is not None:
-        ai_provider = ai_provider or parent_report.provider
-        ai_model = ai_model or parent_report.model
+        # 旧报告的 Provider 可能已停用（GLM / Claude），此时不回落到它，
+        # 改用本次请求显式选择的 Provider，否则更新会直接失败。
+        inherited_provider = parent_report.provider
+        if inherited_provider and ai_client.is_supported_provider(inherited_provider):
+            ai_provider = ai_provider or inherited_provider
+            ai_model = ai_model or parent_report.model
+        elif not ai_provider:
+            raise ValueError(
+                f"上一版报告使用的 Provider（{inherited_provider}）已停用，"
+                "请先在该页面选择新的 Provider 再生成新版本。"
+            )
 
     provider, user_key, user_api_key, user_base_url, model = _resolve_ai(
         session, user, ai_provider, ai_model,
@@ -733,6 +764,25 @@ def create_run(
     else:
         snapshot_holding = holding
 
+    # DeepSeek 没有可用的服务端 web_search（Responses API 该工具仅 v4-pro 支持），
+    # 因此联网走独立的 Search API：先抓取，再把带日期的结果注入提示词。
+    retrieval: Optional[Dict[str, Any]] = None
+    if (
+        use_web_search
+        and execution_mode == "standard"
+        and ai_client.normalize_provider(provider) == "deepseek"
+        and web_search.search_enabled()
+    ):
+        retrieval = web_search.run_search(
+            queries=web_search.build_queries(
+                eff_target, eff_symbol, eff_market, template_key,
+                report_language, is_portfolio=is_portfolio),
+            api_key=user_api_key or os.getenv("DEEPSEEK_API_KEY", ""),
+            base_url=user_base_url,
+            ori_question=combined_extra[:128] if combined_extra else "",
+        )
+    retrieval_md = web_search.retrieval_block(retrieval, report_language)
+
     prompt_md = ""
     if execution_mode == "standard":
         prompt_md = research_prompt_builder.build_prompt(
@@ -752,6 +802,7 @@ def create_run(
             include_holding_context=include_holding_context,
             search_requested=use_web_search,
             search_supported=ai_client.provider_supports_web_search(provider),
+            retrieval_md=retrieval_md,
         )
         if is_portfolio and len(prompt_md.encode("utf-8")) > 100_000:
             context_md = portfolio_context.build_account_context(
@@ -764,6 +815,7 @@ def create_run(
                 preferences=preferences, include_holding_context=include_holding_context,
                 search_requested=use_web_search,
                 search_supported=ai_client.provider_supports_web_search(provider),
+                retrieval_md=retrieval_md,
             )
         if is_portfolio and len(prompt_md.encode("utf-8")) > 100_000:
             raise ValueError(
@@ -771,10 +823,17 @@ def create_run(
                 "也未截断持仓。请精简补充要求或分账户研究。"
             )
         if is_portfolio:
-            prompt_md += (
-                "\n\nExternal search requested: " + str(bool(use_web_search)).lower()
-                + ". Only describe external facts as verified when a search actually succeeds.\n"
-            )
+            if retrieval and retrieval.get("results"):
+                prompt_md += (
+                    "\n\nExternal search executed by this platform: true. "
+                    f"{len(retrieval['results'])} results were fetched and are listed above; "
+                    "cite them. Any external fact not covered by them must be marked unverified.\n"
+                )
+            else:
+                prompt_md += (
+                    "\n\nExternal search requested: " + str(bool(use_web_search)).lower()
+                    + ". Only describe external facts as verified when a search actually succeeds.\n"
+                )
 
     missing = _data_missing(session, user, snapshot_holding, is_portfolio)
     ta_info = None
@@ -814,6 +873,7 @@ def create_run(
         use_web_search=use_web_search, provider=provider, report_mode=report_mode,
         parent_report_id=parent_report.id if parent_report else None,
         ta_info=ta_info,
+        retrieval=retrieval,
     )
     snapshot_json = json.dumps(input_snapshot, ensure_ascii=False)
 
@@ -1037,6 +1097,9 @@ def _finalize_standard(
     except (TypeError, ValueError):
         pass
     requested = bool((snapshot.get("web_search") or {}).get("requested", True))
+    search_meta = snapshot.get("web_search") or {}
+    system_sources = search_meta.get("search_results") or []
+    system_search = bool(search_meta.get("system_search"))
     structured = research_structured.parse_structured_report(
         text,
         is_update=snapshot.get("mode") == "update" or report.parent_report_id is not None,
@@ -1044,7 +1107,8 @@ def _finalize_standard(
     model_sources = structured.get("sources") or []
     merged_sources = []
     seen_source_keys = set()
-    for source in list(provider_sources) + list(model_sources):
+    # 系统真实抓取的结果排在最前：它们是可追溯的实际检索，而不是模型自述。
+    for source in list(system_sources) + list(provider_sources) + list(model_sources):
         key = source.get("url") or source.get("title")
         if not key or key in seen_source_keys:
             continue
@@ -1052,7 +1116,7 @@ def _finalize_standard(
         merged_sources.append(source)
     sources = research_structured.attach_retrieval_metadata(merged_sources)
     source_status = research_structured.source_status_for_standard(
-        provider, requested, sources, source_supported)
+        provider, requested, sources, source_supported, system_search=system_search)
     structured["source_status"] = source_status
     if report.parent_report_id and not structured.get("changes"):
         parent = session.get(ResearchReport, report.parent_report_id)
@@ -1066,6 +1130,9 @@ def _finalize_standard(
         )
 
     usage = ai_client.extract_usage(response, provider=provider, model=model)
+    billed = int(search_meta.get("search_billed_requests") or 0)
+    if usage and billed:
+        usage["search_requests"] = billed
     cost = research_usage.calculate_cost(usage, provider, model)
     limits = research_usage.budget_limits(report.execution_mode)
     budget = research_usage.evaluate_budget(usage, cost, limits, started, now)

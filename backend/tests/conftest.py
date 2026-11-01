@@ -7,6 +7,22 @@ from sqlmodel.pool import StaticPool
 import models  # noqa: F401  确保模型注册到 metadata
 
 
+@pytest.fixture(autouse=True)
+def _no_real_web_search(monkeypatch):
+    """任何测试都不发起真实检索请求（Search API 会产生真实费用）。
+
+    在 HTTP 层拦截：run_search 的逻辑仍可被测试，但不会真的出网。
+    """
+    import requests
+
+    import web_search
+
+    def blocked_post(*args, **kwargs):
+        raise requests.RequestException("测试环境禁止真实网络请求")
+
+    monkeypatch.setattr(web_search.requests, "post", blocked_post)
+
+
 @pytest.fixture(name="engine")
 def engine_fixture():
     engine = create_engine(
