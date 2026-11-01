@@ -25,7 +25,7 @@ TSFinancialSystem 将资产组合、交易流水、行情与汇率、现金账�
 | --- | --- |
 | **资产组合** | 管理券商、银行、钱包、基金、股票、债券、加密货币、现金和多币种展示口径。 |
 | **交易账本** | 将买入、卖出、分红、入金、出金和现金校准流水回放为持仓、成本、已实现盈亏和现金余额。 |
-| **AI 投研** | 研究公司、分析财报、检查持仓和复查投资逻辑；支持 GPT 与 DeepSeek，DeepSeek 模型为 `deepseek-flash`（V4.1-Flash-1017）。 |
+| **AI 投研** | 研究公司、分析财报、检查持仓和复查投资逻辑。 |
 | **复盘闭环** | 保存结构化报告、来源、追问、版本更新、行动项和投资决策笔记。 |
 
 ## 为什么做它
@@ -52,12 +52,9 @@ TSFinancialSystem 将资产组合、交易流水、行情与汇率、现金账�
 ### AI 投研
 
 - 以任务为入口研究公司、分析财报、检查持仓和复查投资逻辑。
-- 支持 GPT 与 DeepSeek，DeepSeek 默认使用 `deepseek-flash`。
-- 支持可选联网检索：DeepSeek 使用 Search API，GPT 使用 OpenAI 联网工具。
 - 生成区分事实、分析、假设、风险和跟踪事项的结构化报告。
 - 在报告内追问，追问记录独立保存，不覆盖原报告。
 - 生成带版本链的研究更新，并保存来源和获取时间。
-- 可选固定版本 TradingAgents 多 Agent 流程，运行于隔离 Worker 子进程中。
 
 ### 安全与部署
 
@@ -109,36 +106,6 @@ python dev.py stop
 python dev.py setup
 ```
 
-## 配置应用
-
-本地开发时复制示例配置：
-
-```bash
-cp backend/.env.example backend/.env
-```
-
-本地将敏感配置放在 `backend/.env`，生产环境使用部署平台的 secret 管理。不要提交 `.env`、`data.db`、账户备份或 API Key。
-
-常用配置：
-
-| 配置项 | 说明 |
-| --- | --- |
-| `ENV` | 设置为 `production` 后启用生产配置检查。 |
-| `DATA_DIR` | SQLite 数据目录，例如 Fly.io 上的 `/data`。 |
-| `DATABASE_URL` | 可选 PostgreSQL 连接串；未设置时使用 SQLite。 |
-| `ALLOW_REGISTRATION` | 是否允许公开注册，默认 `true`。 |
-| `APP_BASE_URL` | 邮箱验证和找回密码使用的公开地址。 |
-| `APP_ENCRYPTION_KEY` | 生产环境必填，用于加密用户 AI API Key。 |
-| `AI_PROVIDER` | 默认 Provider，可选 `gpt` 或 `deepseek`。 |
-| `DEEPSEEK_MODEL` | 默认 `deepseek-flash`，即 DeepSeek-V4.1-Flash-1017 API 模型。 |
-| `DEEPSEEK_SEARCH_ENABLED` | 是否启用 DeepSeek Search API 联网检索，默认 `true`。 |
-| `RESEARCH_MAX_LLM_CALLS` | 单任务模型调用上限，标准研究默认 12，多 Agent 默认 60。 |
-| `RESEARCH_MAX_OUTPUT_TOKENS` | 单任务输出 token 上限，默认 120000。 |
-| `RESEARCH_MAX_SECONDS` | 单任务时间上限，标准研究默认 1800 秒，多 Agent 默认 3600 秒。 |
-| `AI_PRICE_TABLE_JSON` | 可选 Provider/模型价格表，用于费用显示和预算限制。 |
-
-完整配置见 [`backend/.env.example`](backend/.env.example)。
-
 ## AI 投研与最新资料
 
 开启联网检索后，系统会将检索请求、查询结果、日期、URL 和获取时间保存到报告中。来源会标注为系统抓取，不会直接标记为独立核验。联网结果不能代替查看公司公告、交易所公告或监管披露。
@@ -147,34 +114,6 @@ cp backend/.env.example backend/.env
 
 详细的投研流程、TradingAgents 接入、预算限制、迁移行为和验证边界见 [`docs/ai-research-and-tradingagents.md`](docs/ai-research-and-tradingagents.md)。
 
-## 部署到 Fly.io
-
-仓库包含 [`fly.toml`](fly.toml) 和 Dockerfile，可部署前后端一体化应用。
-
-```bash
-fly launch --no-deploy
-fly volumes create data --size 1 --region nrt
-
-fly secrets set ENV="production"
-fly secrets set SECRET_KEY="replace-with-a-long-random-string"
-fly secrets set APP_BASE_URL="https://your-app.fly.dev"
-fly secrets set APP_ENCRYPTION_KEY="<your-fernet-key>"
-fly secrets set ALLOW_SYSTEM_AI_FALLBACK="false"
-
-fly deploy
-```
-
-多 Agent 研究建议至少分配 1 GB 内存：
-
-```bash
-fly scale memory 1024
-```
-
-如果不使用多 Agent，可以跳过 TradingAgents 镜像层：
-
-```bash
-fly deploy --build-arg INSTALL_TRADINGAGENTS=0
-```
 
 ## 文档导航
 
